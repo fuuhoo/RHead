@@ -85,7 +85,30 @@ npm run dev          # http://localhost:1420
 npm run tauri build
 ```
 
+产物在 `src-tauri/target/release/bundle/`（Windows 下同时生成 `.msi` 和 `.exe` 安装包）。
+
+## 下载
+
+Releases 页可下载各平台安装包。自行构建请打 tag：
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+GitHub Actions 会自动构建 Windows / macOS (Intel + Apple Silicon) / Linux 四个平台并创建 Release。
+
 ## 说明
 
 - ES 版本兼容：查询语法使用通用 bool/wildcard/range DSL；`_type` 仅在 ES 6 及以下路径中出现，ES7+ 自动省略。
 - 连接信息（含密码）保存在本机 localStorage；生产环境建议改用系统钥匙串。
+- 权限管理功能需要 ES 开启 X-Pack Security（basic 及以上 license 均支持），并使用 `manage_security` 或 `superuser` 账号连接。
+- 角色映射的规则语法随 ES 版本不同：ES 7.x 只接受 `{"field":{"match"/"regex"/"exclude":...}}`；ES 8.x 支持 `username` / `groups` / `dn` 等元数据规则。
+
+## 致谢
+
+界面与交互逻辑参考 [mobz/elasticsearch-head](https://github.com/mobz/elasticsearch-head)，本项目为 Tauri 2 + React 的重写实现。
+
+## License
+
+[MIT](LICENSE)
