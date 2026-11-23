@@ -1,0 +1,425 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Connection, errorText, esGet, esPut, friendlyError } from "../lib/es";
+import { byteSize, count, healthColor, healthFraction } from "../lib/format";
+import { buildIndices, buildNodes, buildShardMatrix, ClusterSnapshot } from "../lib/cluster";
+import JsonView from "../components/JsonView";
+import Drawer from "../components/Drawer";
+import Modal from "../components/Modal";
+import ShardMatrix from "../components/ShardMatrix";
+
+interface Props {
+  conn: Connection;
+  snap: ClusterSnapshot | null;
+  loading: boolean;
+  onRefresh: () => void;
+  /** open an index in the structured query page (shard chip / index name click) */
+  onOpenIndex?: (index: string) => void;
+}
+
+// Cluster Overview — ports ui/ClusterOverview: health summary, node grid,
+// index list with per-index actions (open/close/refresh/flush/alias).
+
+const QUICK: { label: string; path: string }[] = [
+  { label: "集群信息", path: "" },
+  { label: "集群状态 _stats", path: "_stats" },
+  { label: "节点统计 _nodes/stats", path: "_nodes/stats" },
+  { label: "集群节点 _nodes", path: "_nodes" },
+  { label: "插件 _nodes/plugins", path: "_nodes/plugins" },
+  { label: "Cluster State", path: "_cluster/state" },
+  { label: "Cluster Health", path: "_cluster/health" },
+  { label: "模板 _template", path: "_template" },
+];
+
+export default function Overview({ conn, snap, loading, onRefresh, onOpenIndex }: Props) {
+  const [filter, setFilter] = useState("");
+  const [sort, setSort] = useState<"name" | "address" | "type">("name");
+  const [quickData, setQuickData] = useState<{ title: string; data: any } | null>(null);
+  const [aliasFor, setAliasFor] = useState<string | null>(null);
+  const [aliasName, setAliasName] = useState("");
+  const [msg, setMsg] = useState("");
+  const [showSystem, setShowSystem] = useState(true);
+  const [quickOpen, setQuickOpen] = useState(false);
+  const quickRef = useRef<HTMLDivElement>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newShards, setNewShards] = useState("5");
+  const [newReplicas, setNewReplicas] = useState("1");
+  const [indexSort, setIndexSort] = useState<{ field: "name" | "docs" | "size"; order: "asc" | "desc" }>({
+    field: "name",
+    order: "asc",
+  });
+
+  // close the quick-menu popover on outside click / Esc
+  useEffect(() => {
+    if (!quickOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (quickRef.current && !quickRef.current.contains(e.target as Node)) setQuickOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setQuickOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [quickOpen]);
+
+  const nodes = useMemo(() => {
+    if (!snap) return [];
+    const rows = buildNodes(snap);
+    const by: Record<string, (a: any, b: any) => number> = {
+      name: (a, b) => a.name.localeCompare(b.name),
+      address: (a, b) => (a.transport ?? "").localeCompare(b.transport ?? ""),
+      type: (a, b) => Number(b.master) - Number(a.master) || a.name.localeCompare(b.name),
+    };
+    return rows.sort(by[sort]);
+  }, [snap, sort]);
+
+  const indices = useMemo(() => {
+    if (!snap) return [];
+    const q = filter.trim().toLowerCase();
+    const list = buildIndices(snap, { showSystem }).filter((i) => !q || i.name.toLowerCase().includes(q));
+    const dir = indexSort.order === "asc" ? 1 : -1;
+    return [...list].sort((a, b) => {
+      if (indexSort.field === "docs") return dir * (a.docs - b.docs);
+      if (indexSort.field === "size") return dir * (a.sizeBytes - b.sizeBytes);
+      return dir * a.name.localeCompare(b.name);
+    });
+  }, [snap, filter, showSystem, indexSort]);
+
+  // index × node shard grid, using the same index list (filtered + sorted)
+  const matrix = useMemo(
+    () => (snap ? buildShardMatrix(snap, nodes, indices.map((i) => i.name)) : null),
+    [snap, nodes, indices]
+  );
+
+  const toggleIndexSort = (field: "name" | "docs" | "size") =>
+    setIndexSort((s) =>
+      s.field === field ? { field, order: s.order === "asc" ? "desc" : "asc" } : { field, order: "asc" }
+    );
+  const sortMark = (field: "name" | "docs" | "size") =>
+    indexSort.field === field ? (
+      <span className="sort-arrow">{indexSort.order === "asc" ? "▲" : "▼"}</span>
+    ) : null;
+
+  const health = snap?.clusterHealth;
+  const color = healthColor(health?.status);
+  const frac = healthFraction(health);
+
+  async function openIndex(name: string) {
+    setMsg("");
+    try {
+      const r = await esPut(conn, `/${encodeURIComponent(name)}/_open`);
+      setMsg(r.status < 300 ? `${name} 已开启` : errorText(r));
+      onRefresh();
+    } catch (e: any) {
+      setMsg(friendlyError(e, conn));
+    }
+  }
+
+  async function createAlias() {
+    if (!aliasFor || !aliasName.trim()) return;
+    const r = await esPut(conn, `/_alias/${encodeURIComponent(aliasName.trim())}`, {
+      indices: [aliasFor],
+    });
+    setMsg(r.status < 300 ? `别名 ${aliasName} 已创建` : errorText(r));
+    setAliasFor(null);
+    setAliasName("");
+    onRefresh();
+  }
+
+  async function createIndex() {
+    const name = newName.trim();
+    if (!name) return;
+    let r;
+    try {
+      r = await esPut(conn, `/${encodeURIComponent(name)}`, {
+        settings: { index: { number_of_shards: +newShards, number_of_replicas: +newReplicas } },
+      });
+    } catch (e: any) {
+      setMsg(friendlyError(e, conn));
+      return;
+    }
+    setMsg(r.status < 300 ? `索引 ${name} 已创建` : errorText(r));
+    if (r.status < 300) {
+      setShowNew(false);
+      setNewName("");
+      onRefresh();
+    }
+  }
+
+  async function showInfo(idx: string, kind: "status" | "info" | "mapping") {
+    const path =
+      kind === "status"
+        ? `/${encodeURIComponent(idx)}/_status`
+        : kind === "info"
+          ? `/${encodeURIComponent(idx)}/_settings`
+          : `/${encodeURIComponent(idx)}/_mapping`;
+    try {
+      const r = await esGet(conn, path);
+      setQuickData({ title: `${idx} · ${kind === "info" ? "settings" : kind}`, data: r.json ?? r.raw });
+    } catch (e: any) {
+      setMsg(friendlyError(e, conn));
+    }
+  }
+
+  return (
+    <div className="page">
+      <div className="page-toolbar">
+        <h2>集群概览</h2>
+        <div className="toolbar-actions">
+          <select className="input" value={sort} onChange={(e) => setSort(e.target.value as any)}>
+            <option value="name">按名称排序</option>
+            <option value="address">按地址排序</option>
+            <option value="type">按类型排序</option>
+          </select>
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 13 }}>
+            <input type="checkbox" checked={showSystem} onChange={(e) => setShowSystem(e.target.checked)} />
+            显示系统索引
+          </label>
+          <button className="btn" onClick={onRefresh} disabled={loading}>
+            {loading ? "刷新中…" : "刷新"}
+          </button>
+          <div className="quick-menu" ref={quickRef}>
+            <button className="btn" onClick={() => setQuickOpen((o) => !o)} aria-expanded={quickOpen}>
+              快捷接口 <span className="caret">▾</span>
+            </button>
+            {quickOpen && (
+              <div className="quick-pop" role="menu">
+                {QUICK.map((q) => (
+                  <button
+                    key={q.path}
+                    className="quick-item"
+                    role="menuitem"
+                    onClick={async () => {
+                      setQuickOpen(false);
+                      try {
+                        const r = await esGet(conn, q.path);
+                        setQuickData({ title: q.label, data: r.json ?? r.raw });
+                      } catch (e: any) {
+                        setMsg(friendlyError(e, conn));
+                      }
+                    }}
+                  >
+                    <span>{q.label}</span>
+                    <span className="quick-path">/{q.path}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {snap?.error && <div className="alert alert-error">{snap.error}</div>}
+      {msg && (
+        <div className="alert">
+          <span>{msg}</span>
+          <button className="alert-close" onClick={() => setMsg("")} title="关闭">✕</button>
+        </div>
+      )}
+
+      <section className="cards">
+        <div className="card">
+          <span className="card-label">健康状态</span>
+          <span className="card-value" style={{ color }}>
+            {health?.status ?? "未知"}
+            {frac && <em className="card-frac">({frac.text})</em>}
+          </span>
+          <span className="card-sub">
+            {frac
+              ? `分片 ${frac.active} / ${frac.total} 已分配 · ${frac.percent}%`
+              : `分片 ${health?.number_of_data_nodes ?? "-"} 节点 · ${health?.active_shards_percent ?? "-"}% active`}
+            {frac?.unassigned ? ` · ${frac.unassigned} 未分配` : ""}
+          </span>
+        </div>
+        <div className="card">
+          <span className="card-label">集群名</span>
+          <span className="card-value">{snap?.clusterState?.cluster_name ?? "-"}</span>
+          <span className="card-sub">ES {snap?.version ?? "-"}</span>
+        </div>
+        <div className="card">
+          <span className="card-label">节点数</span>
+          <span className="card-value">{nodes.length}</span>
+          <span className="card-sub">主节点 {nodes.filter((n) => n.master).length} 个</span>
+        </div>
+        <div className="card">
+          <span className="card-label">索引数</span>
+          <span className="card-value">{indices.length}</span>
+          <span className="card-sub">总文档 {count(indices.reduce((a, i) => a + i.docs, 0))}</span>
+        </div>
+      </section>
+
+      <h3>节点 ({nodes.length})</h3>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>角色</th>
+              <th>HTTP 地址</th>
+              <th>堆内存</th>
+              <th>磁盘</th>
+              <th>CPU</th>
+              <th>Load(1m)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map((n) => (
+              <tr key={n.id}>
+                <td>
+                  {n.name} {n.master && <span className="badge badge-master">master</span>}
+                  {n.data && <span className="badge">data</span>}
+                </td>
+                <td>{n.master ? "Master" : n.data ? "Data" : "Client"}</td>
+                <td>{n.httpAddress ?? "-"}</td>
+                <td>
+                  {n.heapUsedPct != null ? (
+                    <span className="meter">
+                      <span style={{ width: `${n.heapUsedPct}%`, background: meterColor(n.heapUsedPct) }} />
+                      <em>{n.heapUsedPct}%{n.heapUsedBytes ? ` · ${byteSize(n.heapUsedBytes)}` : ""}</em>
+                    </span>
+                  ) : "-"}
+                </td>
+                <td>{n.diskUsedPct != null ? `${n.diskUsedPct}%` : "-"}</td>
+                <td>{n.cpuPct != null ? `${n.cpuPct}%` : "-"}</td>
+                <td>{n.load1 ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="h3-row">
+        <h3>分片分布</h3>
+        {matrix && (
+          <span className="shard-summary">
+            {matrix.totals.indices} 个索引 · {matrix.totals.primaries} 个主分片 · {matrix.totals.replicas} 个副本
+            {matrix.totals.unassigned > 0 && ` · ${matrix.totals.unassigned} 个未分配`}
+          </span>
+        )}
+        <div className="shard-legend">
+          <span className="shard-legend-item">
+            <span className="shard-chip shard-chip-primary">0</span> 主分片
+          </span>
+          <span className="shard-legend-item">
+            <span className="shard-chip shard-chip-replica">0</span> 副本
+          </span>
+          <span className="shard-legend-item">
+            <span className="shard-chip shard-chip-relocating">0</span> 迁移中
+          </span>
+          <span className="shard-legend-item">
+            <span className="shard-chip shard-chip-unassigned">0</span> 未分配
+          </span>
+        </div>
+      </div>
+      {matrix && <ShardMatrix matrix={matrix} onOpenIndex={onOpenIndex} />}
+
+      <div className="h3-row">
+        <h3>索引 ({indices.length})</h3>
+        <input
+          className="input input-sm index-search"
+          placeholder="搜索索引…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        <button className="btn btn-xs" onClick={() => setShowNew(true)}>＋ 新建索引</button>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th className="sortable" onClick={() => toggleIndexSort("name")}>
+                索引 {sortMark("name")}
+              </th>
+              <th>状态</th>
+              <th className="sortable" onClick={() => toggleIndexSort("docs")}>
+                文档数 {sortMark("docs")}
+              </th>
+              <th className="sortable" onClick={() => toggleIndexSort("size")}>
+                大小 {sortMark("size")}
+              </th>
+              <th>分片</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {indices.map((i) => (
+              <tr key={i.name}>
+                <td>{i.name}</td>
+                <td>
+                  <span className={`badge ${i.state === "open" ? "badge-open" : "badge-close"}`}>
+                    {i.state}
+                  </span>
+                </td>
+                <td>{count(i.docs)}</td>
+                <td>{byteSize(i.sizeBytes)}</td>
+                <td
+                  title={
+                    i.configuredShards != null
+                      ? `配置：${i.configuredShards} 个分片 · 每分片 ${i.configuredReplicas ?? 0} 个副本`
+                      : undefined
+                  }
+                >
+                  {i.primaries}主 / {i.replicas}副本
+                </td>
+                <td className="row-actions">
+                  <button className="btn btn-xs" onClick={() => showInfo(i.name, "status")}>状态</button>
+                  <button className="btn btn-xs" onClick={() => showInfo(i.name, "info")}>信息</button>
+                  <button className="btn btn-xs" onClick={() => showInfo(i.name, "mapping")}>Mapping</button>
+                  {i.state !== "open" && (
+                    <button className="btn btn-xs" onClick={() => openIndex(i.name)}>开启</button>
+                  )}
+                  <button className="btn btn-xs" onClick={() => setAliasFor(i.name)}>别名…</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {aliasFor && (
+        <Modal title={`为 ${aliasFor} 创建别名`} onClose={() => setAliasFor(null)}>
+          <input className="input" autoFocus value={aliasName} onChange={(e) => setAliasName(e.target.value)} placeholder="别名名称" />
+          <div className="modal-actions">
+            <button className="btn" onClick={createAlias}>创建</button>
+            <button className="btn btn-ghost" onClick={() => setAliasFor(null)}>取消</button>
+          </div>
+        </Modal>
+      )}
+      {quickData && (
+        <Drawer title={quickData.title} onClose={() => setQuickData(null)} width={640}>
+          <JsonView title={quickData.title} data={quickData.data} />
+        </Drawer>
+      )}
+      {showNew && (
+        <Modal title="新建索引" onClose={() => setShowNew(false)}>
+          <label>
+            索引名称
+            <input className="input" autoFocus value={newName} onChange={(e) => setNewName(e.target.value)} />
+          </label>
+          <label>
+            分片数
+            <input className="input" type="number" min={1} value={newShards} onChange={(e) => setNewShards(e.target.value)} />
+          </label>
+          <label>
+            副本数
+            <input className="input" type="number" min={0} value={newReplicas} onChange={(e) => setNewReplicas(e.target.value)} />
+          </label>
+          <div className="modal-actions">
+            <button className="btn" onClick={createIndex}>创建</button>
+            <button className="btn btn-ghost" onClick={() => setShowNew(false)}>取消</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function meterColor(pct: number): string {
+  if (pct >= 85) return "#ef4444";
+  if (pct >= 70) return "#eab308";
+  return "#22c55e";
+}
