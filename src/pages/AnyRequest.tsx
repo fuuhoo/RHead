@@ -163,7 +163,7 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
     : [];
 
   return (
-    <div className="any-layout">
+    <div className="any-layout page-fill">
       <aside className="any-side">
         <div className="filter-section">
           <div className="section-head">
@@ -269,7 +269,7 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
         <QueryEditor
           value={body}
           onChange={setBody}
-          height={300}
+          height={220}
           label="请求体 JSON（Ctrl+Enter 提交）"
           onSubmit={() => send()}
         />
@@ -281,7 +281,7 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
         )}
         <div className="filter-section">
           <h4>结果转换器 <code>function(root, prev) {"{"}</code></h4>
-          <textarea className="code-editor" rows={4} value={transform} onChange={(e) => setTransform(e.target.value)} spellCheck={false} />
+          <textarea className="code-editor" rows={3} value={transform} onChange={(e) => setTransform(e.target.value)} spellCheck={false} />
           <code>{"}"}</code>
         </div>
         {error && <div className="alert alert-error">{error}</div>}
@@ -294,8 +294,10 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
                 ))}
               </div>
             )}
-            {hits ? <ResultsTable hits={hits} total={out.hits?.total?.value ?? out.hits?.total} /> : null}
-            {asJson && <JsonView data={out} title="响应" />}
+            {hits ? <ResultsTable hits={hits} total={out.hits?.total?.value ?? out.hits?.total} scroll /> : null}
+            {/* the raw JSON and the table would fight over the space, so the
+                table wins when both are switched on */}
+            {asJson && !hits && <JsonView data={out} title="响应" />}
           </div>
         )}
       </main>

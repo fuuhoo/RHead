@@ -20,9 +20,23 @@ interface Props {
   sortField?: string;
   sortOrder?: "asc" | "desc";
   onSelect?: (hit: Hit) => void;
+  /**
+   * Make the table its own scroll container: the header sticks to the top of
+   * the table and the horizontal scrollbar sits right below the visible
+   * rows instead of below the whole result set.
+   */
+  scroll?: boolean;
 }
 
-export default function ResultsTable({ hits, total, onSort, sortField, sortOrder, onSelect }: Props) {
+export default function ResultsTable({
+  hits,
+  total,
+  onSort,
+  sortField,
+  sortOrder,
+  onSelect,
+  scroll,
+}: Props) {
   const [selected, setSelected] = useState<string | null>(null);
 
   const columns = useMemo(() => {
@@ -45,48 +59,50 @@ export default function ResultsTable({ hits, total, onSort, sortField, sortOrder
   if (!hits.length) return <div className="empty">没有命中文档</div>;
 
   return (
-    <div className="table-wrap">
+    <div className={`table-block ${scroll ? "table-block-fill" : ""}`}>
       <div className="table-meta">
         共 <b>{total ?? hits.length}</b> 条命中 · 显示 {hits.length} 条
       </div>
-      <table className="data-table">
-        <thead>
-          <tr>
-            {columns.map((c) => (
-              <th
-                key={c}
-                onClick={() => {
-                  if (!onSort) return;
-                  const next: "asc" | "desc" =
-                    sortField === c && sortOrder === "asc" ? "desc" : "asc";
-                  onSort(c, next);
-                }}
-                className={onSort ? "sortable" : ""}
-              >
-                {c} {sortField === c ? (sortOrder === "asc" ? "▲" : "▼") : ""}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ hit, cells }) => (
-            <tr
-              key={hit._index + hit._id}
-              className={selected === hit._id ? "selected" : ""}
-              onClick={() => {
-                setSelected(hit._id);
-                onSelect?.(hit);
-              }}
-            >
-              {cells.map((v, i) => (
-                <td key={i} title={cellText(v)}>
-                  {cellText(v)}
-                </td>
+      <div className={`table-wrap ${scroll ? "table-wrap-scroll" : ""}`}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              {columns.map((c) => (
+                <th
+                  key={c}
+                  onClick={() => {
+                    if (!onSort) return;
+                    const next: "asc" | "desc" =
+                      sortField === c && sortOrder === "asc" ? "desc" : "asc";
+                    onSort(c, next);
+                  }}
+                  className={onSort ? "sortable" : ""}
+                >
+                  {c} {sortField === c ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map(({ hit, cells }) => (
+              <tr
+                key={hit._index + hit._id}
+                className={selected === hit._id ? "selected" : ""}
+                onClick={() => {
+                  setSelected(hit._id);
+                  onSelect?.(hit);
+                }}
+              >
+                {cells.map((v, i) => (
+                  <td key={i} title={cellText(v)}>
+                    {cellText(v)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

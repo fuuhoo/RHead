@@ -325,7 +325,7 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
       : null;
 
   return (
-    <div className="page">
+    <div className="page page-fill">
       <div className="page-toolbar">
         <h2>结构化查询</h2>
         <div className="toolbar-actions">
@@ -669,7 +669,7 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
       {error && <div className="alert alert-error">{error}</div>}
 
       {result && outputType === "table" && (
-        <ResultsTable hits={hits} total={total} onSelect={setInspected} />
+        <ResultsTable hits={hits} total={total} onSelect={setInspected} scroll />
       )}
       {result && outputType === "json" && <JsonView title="结果" data={result} />}
       {csv && <pre className="code-editor">{csv}</pre>}
