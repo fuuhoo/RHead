@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Connection, esRequest, friendlyError } from "../lib/es";
 import { clampTimeout, loadTimeout, saveTimeout } from "../lib/timeout";
+import { columnStoreKey } from "../lib/columns";
 import QueryEditor from "../components/QueryEditor";
 import QueryVisualizer from "../components/QueryVisualizer";
 import ResultsTable from "../components/ResultsTable";
@@ -294,7 +295,14 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
                 ))}
               </div>
             )}
-            {hits ? <ResultsTable hits={hits} total={out.hits?.total?.value ?? out.hits?.total} scroll /> : null}
+            {hits ? (
+              <ResultsTable
+                hits={hits}
+                total={out.hits?.total?.value ?? out.hits?.total}
+                scroll
+                storeKey={columnStoreKey(conn.baseUrl, conn.username, path)}
+              />
+            ) : null}
             {/* the raw JSON and the table would fight over the space, so the
                 table wins when both are switched on */}
             {asJson && !hits && <JsonView data={out} title="响应" />}

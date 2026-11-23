@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Connection, errorText, esGet, esPost, friendlyError } from "../lib/es";
 import { parseMappingResponse } from "../lib/format";
 import { clampTimeout, loadTimeout, saveTimeout } from "../lib/timeout";
+import { columnStoreKey } from "../lib/columns";
 import { buildDSL, Clause, newClause, SearchState } from "../lib/queryBuilder";
 import QueryEditor from "../components/QueryEditor";
 import QueryVisualizer from "../components/QueryVisualizer";
@@ -659,7 +660,13 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
       {error && <div className="alert alert-error">{error}</div>}
 
       {result && outputType === "table" && (
-        <ResultsTable hits={hits} total={total} onSelect={setInspected} scroll />
+        <ResultsTable
+          hits={hits}
+          total={total}
+          onSelect={setInspected}
+          scroll
+          storeKey={columnStoreKey(conn.baseUrl, conn.username, index)}
+        />
       )}
       {result && outputType === "json" && <JsonView title="结果" data={result} />}
       {csv && <pre className="code-editor">{csv}</pre>}

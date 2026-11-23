@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cellText, flattenSource } from "../lib/format";
+import { loadHiddenColumns, saveHiddenColumns } from "../lib/columns";
 
 // Data table for _search hits (replaces ui/ResultTable + ui/Table).
 // Click a row to inspect the full document; click a header to sort.
@@ -26,6 +27,11 @@ interface Props {
    * rows instead of below the whole result set.
    */
   scroll?: boolean;
+  /**
+   * Where to persist the column visibility. Without it the choice is only
+   * kept for the lifetime of the component.
+   */
+  storeKey?: string;
 }
 
 /** Columns that are always shown - they identify the row itself. */
@@ -39,11 +45,16 @@ export default function ResultsTable({
   sortOrder,
   onSelect,
   scroll,
+  storeKey,
 }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  // mirrors `hidden` so rapid clicks always work on the latest value
+  const hiddenRef = useRef<Set<string>>(new Set());
   const pickerRef = useRef<HTMLDivElement | null>(null);
+  // the store key the current `hidden` set belongs to
+  const loadedKey = useRef<string | null>(null);
 
   const allColumns = useMemo(() => {
     const cols = new Set<string>(PINNED);
@@ -53,22 +64,44 @@ export default function ResultsTable({
     return [...cols];
   }, [hits]);
 
+  // load the stored preference when the key changes (a different index)
+  useEffect(() => {
+    if (!storeKey) return;
+    if (loadedKey.current === storeKey) return;
+    loadedKey.current = storeKey;
+    const stored = loadHiddenColumns(storeKey);
+    hiddenRef.current = stored;
+    setHidden(stored);
+  }, [storeKey]);
+
+  /**
+   * Change the hidden columns and persist them.
+   *
+   * Saving happens at the mutation site instead of in an effect: an effect
+   * would also run on mount, where it would write the empty initial set over
+   * the preference that was just loaded.
+   */
+  const updateHidden = (next: Set<string>) => {
+    hiddenRef.current = next;
+    setHidden(next);
+    if (storeKey) saveHiddenColumns(storeKey, next);
+  };
+
   // A column that reappears (new page, different index) must not stay hidden.
   const visibleColumns = useMemo(
     () => allColumns.filter((c) => !hidden.has(c)),
     [allColumns, hidden]
   );
 
-  // Drop hidden entries for columns that no longer exist, otherwise the
-  // picker would show a stale list.
-  useEffect(() => {
-    setHidden((prev) => {
-      const alive = new Set(allColumns);
-      const next = new Set([...prev].filter((c) => alive.has(c)));
-      if (next.size === prev.size) return prev;
-      return next;
-    });
-  }, [allColumns]);
+  // The picker lists every column the user knows about: the ones in the
+  // current result plus the ones they hid earlier. A column that is hidden
+  // but not in this page of results must stay listed - otherwise hiding a
+  // field and paging on would silently bring it back.
+  const pickerColumns = useMemo(() => {
+    const out = [...allColumns];
+    for (const c of hidden) if (!out.includes(c)) out.push(c);
+    return out;
+  }, [allColumns, hidden]);
 
   // close the picker on an outside click
   useEffect(() => {
@@ -96,19 +129,18 @@ export default function ResultsTable({
     [hits, visibleColumns]
   );
 
-  const toggle = (c: string) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(c)) next.delete(c);
-      else next.add(c);
-      return next;
-    });
+  const toggle = (c: string) => {
+    const next = new Set(hiddenRef.current);
+    if (next.has(c)) next.delete(c);
+    else next.add(c);
+    updateHidden(next);
+  };
 
-  const showAll = () => setHidden(new Set());
-  const hideAll = () => setHidden(new Set(allColumns.filter((c) => !PINNED.includes(c))));
+  const showAll = () => updateHidden(new Set());
+  const hideAll = () => updateHidden(new Set(pickerColumns.filter((c) => !PINNED.includes(c))));
   /** keep only the pinned columns plus the given one */
   const showOnly = (c: string) =>
-    setHidden(new Set(allColumns.filter((x) => x !== c && !PINNED.includes(x))));
+    updateHidden(new Set(pickerColumns.filter((x) => x !== c && !PINNED.includes(x))));
 
   if (!hits.length) return <div className="empty">没有命中文档</div>;
 
@@ -119,7 +151,7 @@ export default function ResultsTable({
       <div className="table-meta">
         共 <b>{total ?? hits.length}</b> 条命中 · 显示 {hits.length} 条
         <span className="table-meta-cols">
-          {visibleColumns.length}/{allColumns.length} 列
+          {visibleColumns.length}/{pickerColumns.length} 列
           {hiddenCount > 0 ? ` · 已隐藏 ${hiddenCount}` : ""}
         </span>
         <div className="col-picker" ref={pickerRef}>
@@ -137,8 +169,11 @@ export default function ResultsTable({
                 <button className="btn btn-xs" onClick={hideAll}>仅显示关键列</button>
                 <button className="btn btn-xs" onClick={() => setPickerOpen(false)}>关闭</button>
               </div>
+              {storeKey && (
+                <div className="col-picker-hint">列的显示状态按索引保存，下次打开自动恢复</div>
+              )}
               <div className="col-picker-list">
-                {allColumns.map((c) => {
+                {pickerColumns.map((c) => {
                   const on = !hidden.has(c);
                   const pinned = PINNED.includes(c);
                   return (
