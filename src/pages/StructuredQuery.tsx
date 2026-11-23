@@ -99,7 +99,7 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
   const [timeoutSec, setTimeoutSec] = useState<number>(() => loadTimeout());
   const lastSig = useRef("");
   const [queryText, setQueryText] = useState("");
-  const [showDSL, setShowDSL] = useState(true);
+  const [showDSL, setShowDSL] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [src, setSrc] = useState<any>(null);
   const [error, setError] = useState("");
@@ -414,7 +414,7 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
         </div>
       ) : (
         <>
-      <div className={`builder-card ${showDSL ? "" : "builder-card-wide"}`}>
+      <div className="builder-card">
         <div className="builder-main">
         <div className="builder-col builder-col-input">
         <div className="builder-section">
@@ -531,19 +531,6 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
           </div>
         </div>
         </div>
-
-        {showDSL && (
-          <div className="builder-col builder-col-output">
-            <QueryVisualizer body={previewBody} title="查询结构" />
-            {src ? (
-              <JsonView title="请求 DSL" data={src} defaultDepth={2} />
-            ) : (
-              <div className="json-panel qv-placeholder">
-                <div className="empty">执行搜索后显示请求 DSL</div>
-              </div>
-            )}
-          </div>
-        )}
         </div>
 
         <div className="builder-actions">
@@ -575,10 +562,13 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
             />
             <span className="toolbar-sentence">秒</span>
           </label>
-          <label className="builder-toggle">
-            <input type="checkbox" checked={showDSL} onChange={(e) => setShowDSL(e.target.checked)} />
-            显示查询语句
-          </label>
+          <button
+            className="btn btn-xs"
+            onClick={() => setShowDSL(true)}
+            title="在右侧抽屉中查看查询结构与请求 DSL"
+          >
+            查看查询语句
+          </button>
         </div>
 
         {/* result summary + pagination */}
@@ -679,6 +669,21 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
       {inspected && (
         <Drawer title={`${inspected._index}/${inspected._id}`} onClose={() => setInspected(null)}>
           <JsonView title="文档" data={inspected} />
+        </Drawer>
+      )}
+
+      {/* the query structure and the request DSL live in a side drawer so
+          they never take space away from the result table */}
+      {showDSL && (
+        <Drawer title="查询语句" onClose={() => setShowDSL(false)} width={520}>
+          <QueryVisualizer body={previewBody} title="查询结构" />
+          {src ? (
+            <JsonView title="请求 DSL" data={src} defaultDepth={2} />
+          ) : (
+            <div className="json-panel qv-placeholder">
+              <div className="empty">执行搜索后显示请求 DSL</div>
+            </div>
+          )}
         </Drawer>
       )}
 
