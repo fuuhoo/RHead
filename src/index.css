@@ -529,6 +529,11 @@ h4 { margin: 0 0 7px; font-size: 12px; color: var(--muted); text-transform: uppe
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   max-width: 240px; font-weight: 600;
 }
+/* the total document count of the selected index */
+.idx-total {
+  font-size: 12px; color: var(--muted); white-space: nowrap;
+}
+.idx-total b { color: var(--text); font-weight: 600; }
 /* a required field that is not filled in yet */
 .btn-required {
   border-color: var(--danger); color: var(--danger); background: #fef2f2;

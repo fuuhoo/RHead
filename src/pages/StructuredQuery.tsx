@@ -48,6 +48,27 @@ const newUIClause = (p: Partial<UIClause> = {}): UIClause => ({
   ...p,
 });
 
+/** One index with its document count. */
+interface IndexInfo {
+  name: string;
+  docs: number | null;
+}
+
+/**
+ * Read the index list together with its document counts.
+ *
+ * `docs.count` of _cat/indices counts the primary shards only, so it matches
+ * the number the overview page shows.
+ */
+async function fetchIndexList(conn: Connection): Promise<IndexInfo[]> {
+  const r = await esGet(conn, "_cat/indices?format=json&h=index,docs.count");
+  if (!Array.isArray(r.json)) return [];
+  return r.json.map((x: any) => ({
+    name: x.index,
+    docs: x["docs.count"] != null && x["docs.count"] !== "" ? Number(x["docs.count"]) : null,
+  }));
+}
+
 const MUST_OPTIONS: { value: Clause["must"]; label: string }[] = [
   { value: "must", label: "must" },
   { value: "should", label: "should" },
@@ -87,7 +108,7 @@ function buildPageItems(current: number, last: number): (number | "...")[] {
 }
 
 export default function StructuredQuery({ conn, initialIndex }: { conn: Connection; initialIndex?: string }) {
-  const [allIndices, setAllIndices] = useState<{ name: string; docs: number | null }[]>([]);
+  const [allIndices, setAllIndices] = useState<IndexInfo[]>([]);
   const [index, setIndex] = useState<string>("");
   const [fields, setFields] = useState<{ name: string; type: string; indices: number }[]>([]);
   const [mode, setMode] = useState<"build" | "dsl">("build");
@@ -113,12 +134,10 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
 
   // index list (with doc counts)
   useEffect(() => {
-    esGet(conn, "_cat/indices?format=json&h=index,docs.count").then((r) => {
-      if (Array.isArray(r.json)) {
-        const rows = r.json.map((x: any) => ({
-          name: x.index,
-          docs: x["docs.count"] != null && x["docs.count"] !== "" ? Number(x["docs.count"]) : null,
-        }));
+    let alive = true;
+    fetchIndexList(conn)
+      .then((rows) => {
+        if (!alive) return;
         setAllIndices(rows);
         // a query must always target one explicit index - preselect the first
         // usable one so the page is usable right away. System indices (".x")
@@ -129,8 +148,11 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
           const usable = rows.find((r) => !r.name.startsWith("."));
           return (usable ?? rows[0]).name;
         });
-      }
-    }).catch((e: any) => setError(friendlyError(e, conn)));
+      })
+      .catch((e: any) => setError(friendlyError(e, conn)));
+    return () => {
+      alive = false;
+    };
   }, [conn]);
 
   // preselect an index (e.g. opened from the shard matrix)
@@ -177,6 +199,13 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
     const q = idxSearch.trim().toLowerCase();
     return allIndices.filter((i) => !q || i.name.toLowerCase().includes(q));
   }, [allIndices, idxSearch]);
+
+  /** total number of documents stored in the selected index */
+  const indexDocs = useMemo(() => {
+    if (!index) return null;
+    const hit = allIndices.find((i) => i.name === index);
+    return hit?.docs ?? null;
+  }, [allIndices, index]);
 
   // switching the index resets the result (it no longer belongs to this index)
   const selectIndex = (name: string) => {
@@ -388,6 +417,11 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
               </div>
             )}
           </div>
+          {index && (
+            <span className="idx-total" title={`索引 ${index} 中的文档总数`}>
+              索引共 <b>{indexDocs != null ? indexDocs.toLocaleString() : "-"}</b> 条
+            </span>
+          )}
           <span className="toolbar-sentence">的文档</span>
           <button
             className="btn btn-xs"
@@ -577,6 +611,11 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
           <div className="builder-result">
             <div className="result-meta">
               <span className="result-chip">命中 <b>{total ?? "-"}</b> 条</span>
+              {indexDocs != null && (
+                <span className="result-chip" title={`索引 ${index} 中的文档总数`}>
+                  索引共 <b>{indexDocs.toLocaleString()}</b> 条
+                </span>
+              )}
               <span className="result-chip">耗时 <b>{result.took}ms</b></span>
               <span className="result-chip">
                 分片 {result._shards?.successful ?? "-"}/{result._shards?.total ?? "-"}
