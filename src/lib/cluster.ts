@@ -360,6 +360,37 @@ export interface IndexRow {
   configuredReplicas?: number;
 }
 
+/** The live numbers of one index: document count and store size. */
+export interface IndexStat {
+  name: string;
+  docs: number;
+  sizeBytes: number;
+}
+
+/**
+ * Fetch only the index statistics (document count and size).
+ *
+ * A full snapshot also pulls the cluster state and the node statistics, which
+ * are far heavier; this is a single light request for the numbers the index
+ * table shows.
+ *
+ * The semantics match `buildIndices`: the document count comes from the
+ * primary shards (no replica double counting) and the size from all copies.
+ */
+export async function fetchIndexStats(conn: Connection): Promise<Map<string, IndexStat>> {
+  const r = await esGet(conn, "_stats");
+  const out = new Map<string, IndexStat>();
+  const indices = r?.json?.indices ?? {};
+  for (const [name, st] of Object.entries(indices) as [string, any][]) {
+    out.set(name, {
+      name,
+      docs: st?.primaries?.docs?.count ?? 0,
+      sizeBytes: st?.total?.store?.size_in_bytes ?? 0,
+    });
+  }
+  return out;
+}
+
 /**
  * Read an index setting from the cluster state.
  * ES 7/8 nests them under settings.index.*, ES 5/6 uses flat index.* keys.

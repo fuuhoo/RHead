@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Connection, errorText, esGet, esPut, friendlyError } from "../lib/es";
 import { byteSize, count, healthColor, healthFraction } from "../lib/format";
-import { buildIndices, buildNodes, buildShardMatrix, ClusterSnapshot } from "../lib/cluster";
+import { buildIndices, buildNodes, buildShardMatrix, ClusterSnapshot, fetchIndexStats, IndexStat } from "../lib/cluster";
 import JsonView from "../components/JsonView";
 import Drawer from "../components/Drawer";
 import Modal from "../components/Modal";
@@ -48,6 +48,11 @@ export default function Overview({ conn, snap, loading, onRefresh, onOpenIndex }
     field: "name",
     order: "asc",
   });
+  // live document counts fetched on demand (the snapshot may be stale)
+  const [liveStats, setLiveStats] = useState<Map<string, IndexStat> | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState("");
+  const [statsAt, setStatsAt] = useState<Date | null>(null);
 
   // close the quick-menu popover on outside click / Esc
   useEffect(() => {
@@ -81,13 +86,20 @@ export default function Overview({ conn, snap, loading, onRefresh, onOpenIndex }
     if (!snap) return [];
     const q = filter.trim().toLowerCase();
     const list = buildIndices(snap, { showSystem }).filter((i) => !q || i.name.toLowerCase().includes(q));
+    // the live numbers win over the snapshot - they were fetched later
+    const merged = liveStats
+      ? list.map((i) => {
+          const s = liveStats.get(i.name);
+          return s ? { ...i, docs: s.docs, sizeBytes: s.sizeBytes } : i;
+        })
+      : list;
     const dir = indexSort.order === "asc" ? 1 : -1;
-    return [...list].sort((a, b) => {
+    return [...merged].sort((a, b) => {
       if (indexSort.field === "docs") return dir * (a.docs - b.docs);
       if (indexSort.field === "size") return dir * (a.sizeBytes - b.sizeBytes);
       return dir * a.name.localeCompare(b.name);
     });
-  }, [snap, filter, showSystem, indexSort]);
+  }, [snap, filter, showSystem, indexSort, liveStats]);
 
   // index × node shard grid, using the same index list (filtered + sorted)
   const matrix = useMemo(
@@ -107,6 +119,27 @@ export default function Overview({ conn, snap, loading, onRefresh, onOpenIndex }
   const health = snap?.clusterHealth;
   const color = healthColor(health?.status);
   const frac = healthFraction(health);
+
+  /**
+   * Re-read the index statistics only.
+   *
+   * The snapshot on top of the page pulls the cluster state and the node
+   * statistics as well, which is slow on a big cluster; the index table only
+   * needs the document counts and the sizes.
+   */
+  async function refreshIndexStats() {
+    setStatsLoading(true);
+    setStatsError("");
+    try {
+      const stats = await fetchIndexStats(conn);
+      setLiveStats(stats);
+      setStatsAt(new Date());
+    } catch (e: any) {
+      setStatsError(friendlyError(e, conn));
+    } finally {
+      setStatsLoading(false);
+    }
+  }
 
   async function openIndex(name: string) {
     setMsg("");
@@ -325,8 +358,22 @@ export default function Overview({ conn, snap, loading, onRefresh, onOpenIndex }
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
+        <button
+          className="btn btn-xs idx-refresh"
+          onClick={refreshIndexStats}
+          disabled={statsLoading}
+          title="重新读取各索引的文档数与大小（仅请求 _stats，不刷新整个集群）"
+        >
+          {statsLoading ? <span className="spinner" /> : "↻"} 刷新
+        </button>
         <button className="btn btn-xs" onClick={() => setShowNew(true)}>＋ 新建索引</button>
       </div>
+      {statsError && <div className="alert alert-error idx-refresh-error">{statsError}</div>}
+      {statsAt && !statsError && (
+        <div className="idx-refresh-note">
+          文档数已于 {statsAt.toLocaleTimeString("zh-CN", { hour12: false })} 刷新
+        </div>
+      )}
       <div className="table-wrap">
         <table className="data-table">
           <thead>
