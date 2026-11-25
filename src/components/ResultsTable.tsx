@@ -50,6 +50,7 @@ export default function ResultsTable({
   const [selected, setSelected] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
+  const [colFilter, setColFilter] = useState("");
   // mirrors `hidden` so rapid clicks always work on the latest value
   const hiddenRef = useRef<Set<string>>(new Set());
   const pickerRef = useRef<HTMLDivElement | null>(null);
@@ -102,6 +103,13 @@ export default function ResultsTable({
     for (const c of hidden) if (!out.includes(c)) out.push(c);
     return out;
   }, [allColumns, hidden]);
+
+  // narrow the picker list down by column name
+  const filteredColumns = useMemo(() => {
+    const q = colFilter.trim().toLowerCase();
+    if (!q) return pickerColumns;
+    return pickerColumns.filter((c) => c.toLowerCase().includes(q));
+  }, [pickerColumns, colFilter]);
 
   // close the picker on an outside click
   useEffect(() => {
@@ -157,7 +165,12 @@ export default function ResultsTable({
         <div className="col-picker" ref={pickerRef}>
           <button
             className="btn btn-xs"
-            onClick={() => setPickerOpen((v) => !v)}
+            onClick={() => {
+              setPickerOpen((v) => {
+                if (v) setColFilter("");
+                return !v;
+              });
+            }}
             title="选择要显示的列"
           >
             列设置{hiddenCount > 0 ? ` (${hiddenCount})` : ""}
@@ -169,11 +182,25 @@ export default function ResultsTable({
                 <button className="btn btn-xs" onClick={hideAll}>仅显示关键列</button>
                 <button className="btn btn-xs" onClick={() => setPickerOpen(false)}>关闭</button>
               </div>
+              <div className="col-picker-search">
+                <input
+                  className="input input-sm col-picker-input"
+                  placeholder="筛选列名…"
+                  value={colFilter}
+                  onChange={(e) => setColFilter(e.target.value)}
+                  autoFocus
+                />
+                {colFilter && (
+                  <span className="col-picker-count">
+                    {filteredColumns.length}/{pickerColumns.length}
+                  </span>
+                )}
+              </div>
               {storeKey && (
                 <div className="col-picker-hint">列的显示状态按索引保存，下次打开自动恢复</div>
               )}
               <div className="col-picker-list">
-                {pickerColumns.map((c) => {
+                {filteredColumns.map((c) => {
                   const on = !hidden.has(c);
                   const pinned = PINNED.includes(c);
                   return (
@@ -190,6 +217,9 @@ export default function ResultsTable({
                     </label>
                   );
                 })}
+                {filteredColumns.length === 0 && (
+                  <div className="col-picker-empty">没有匹配「{colFilter}」的列</div>
+                )}
               </div>
             </div>
           )}
