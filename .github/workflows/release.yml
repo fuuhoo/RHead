@@ -126,10 +126,19 @@ jobs:
             \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' \
                -o -name '*.rpm' -o -name '*.AppImage' \) \
             -exec cp {} installers/ \;
-          # macOS: also ship the .app bundle as a tar.gz
+          # macOS: also ship the .app bundle as a tar.gz. The name must carry
+          # the target - both macOS jobs build an app called RHead.app and
+          # would otherwise produce the same tarball name.
           for app in src-tauri/target/*/release/bundle/macos/*.app; do
             [ -e "$app" ] || continue
-            tar -czf "installers/$(basename "$app").tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
+            # src-tauri/target/<target>/release/bundle/macos/RHead.app
+            raw="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$app")")")")")"
+            case "$raw" in
+              x86_64-apple-darwin) target="x64" ;;
+              aarch64-apple-darwin) target="aarch64" ;;
+              *) target="$raw" ;;
+            esac
+            tar -czf "installers/RHead_${target}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
           done
           ls -la installers
 
