@@ -17,6 +17,7 @@ import QueryEditor from "../components/QueryEditor";
 import QueryVisualizer from "../components/QueryVisualizer";
 import ResultsTable from "../components/ResultsTable";
 import JsonView from "../components/JsonView";
+import ExportDialog from "../components/ExportDialog";
 
 // Any Request — ports ui/AnyRequest: raw method+path+body, history,
 // transformer fn(root, prev), cron repeat, JSON/table display.
@@ -104,6 +105,7 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
   /** the index names of the cluster - offered while the path is edited */
   const [indexNames, setIndexNames] = useState<string[]>([]);
   const [pathOpen, setPathOpen] = useState(false);
+  const [showExport, setShowExport] = useState(false);
 
   const targetIndices = useMemo(() => indicesFromPath(path), [path]);
   const targetKey = targetIndices.join(",");
@@ -361,6 +363,54 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
       ]
     : [];
 
+  /**
+   * The export runs a search of its own, so it needs a query body and the
+   * indices to run it against. A request that is not a search (a PUT, a
+   * _count, ...) cannot be exported.
+   */
+  const exportable = useMemo(() => {
+    if (!out?.hits) return false;
+    if (!targetIndices.length) return false;
+    try {
+      const j = JSON.parse(body);
+      if (!j || typeof j !== "object" || Array.isArray(j)) return false;
+      return j.query != null || j.aggs != null;
+    } catch {
+      return false;
+    }
+  }, [out, targetIndices, body]);
+
+  /** the parsed body, for the export */
+  const exportBody = useMemo(() => {
+    try {
+      const j = JSON.parse(body);
+      if (j && typeof j === "object" && !Array.isArray(j)) return j;
+      return null;
+    } catch {
+      return null;
+    }
+  }, [body]);
+
+  const exportTotal = out?.hits?.total?.value ?? out?.hits?.total ?? 0;
+
+  /** a short description of the query, shown in the export dialog */
+  const filterSummary = useMemo(() => {
+    if (!exportBody) return "无（全部文档）";
+    const parts: string[] = [];
+    const q = exportBody.query;
+    if (q) {
+      const kind = Object.keys(q)[0] ?? "";
+      parts.push(`query: ${kind}`);
+    }
+    if (exportBody.aggs) {
+      parts.push(`聚合: ${Object.keys(exportBody.aggs).join(", ")}`);
+    }
+    if (exportBody.sort) {
+      parts.push("排序");
+    }
+    return parts.length ? parts.join("，") : "无（全部文档）";
+  }, [exportBody]);
+
   return (
     <div className="any-layout page-fill">
       <aside className="any-side">
@@ -529,6 +579,15 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
                 {stats.map((s) => (
                   <span key={s.label} className="result-chip">{s.label} <b>{s.value}</b></span>
                 ))}
+                {exportable && (
+                  <button
+                    className="btn btn-xs result-export"
+                    title="导出符合当前请求的全部命中文档（Rust 侧流式写盘，内存恒定）"
+                    onClick={() => setShowExport(true)}
+                  >
+                    ⬇ 导出命中数据
+                  </button>
+                )}
               </div>
             )}
             {hits ? (
@@ -545,6 +604,19 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
           </div>
         )}
       </main>
+      {showExport && exportBody && (
+        <ExportDialog
+          baseUrl={conn.baseUrl}
+          username={conn.username}
+          password={conn.password}
+          indices={targetIndices}
+          body={exportBody}
+          fields={editorFields}
+          filterSummary={filterSummary}
+          total={Number(exportTotal) || 0}
+          onClose={() => setShowExport(false)}
+        />
+      )}
     </div>
   );
 }
