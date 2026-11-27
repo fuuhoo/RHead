@@ -258,20 +258,22 @@ export async function fetchRepoStatus(conn: Connection, repo: string): Promise<a
 }
 
 /**
- * GET /_cat/shards -> { index: shardCount }
+ * GET /_cat/shards -> { index: primaryShardCount }
  *
- * The number of shard copies an index has. Used to tell whether a snapshot
- * really contains all of its data: a snapshot taken while shards were
- * unassigned is missing them, and with `partial` enabled ES accepts that
- * silently.
+ * Only the PRIMARY shards are counted. A snapshot stores one copy of every
+ * primary shard - the replicas are irrelevant for the backup, and they are
+ * often unassigned (e.g. on a single node cluster, where a replica cannot
+ * live next to its primary). Counting them would wrongly report every
+ * snapshot as incomplete.
  */
 export async function fetchShardCounts(conn: Connection): Promise<Record<string, number>> {
-  const r = await esGet(conn, "_cat/shards?format=json&h=index,shard,prirep");
+  const r = await esGet(conn, "_cat/shards?format=json&h=index,shard,prirep,state");
   if (r.status >= 400) return {};
   const out: Record<string, number> = {};
   for (const row of (r.json ?? []) as any[]) {
     if (!row?.index) continue;
-    // prirep is "p" or "r" - both are a separate shard copy
+    // prirep is "p" (primary) or "r" (replica)
+    if (row.prirep !== "p") continue;
     out[row.index] = (out[row.index] ?? 0) + 1;
   }
   return out;

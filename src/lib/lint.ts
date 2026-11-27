@@ -44,6 +44,8 @@ export interface LintContext {
 
 export const DEFAULT_MAX_RESULT_WINDOW = 10000;
 
+import { Connection, esGet } from "./es";
+
 // ---------------------------------------------------------------------------
 // Mapping
 // ---------------------------------------------------------------------------
@@ -96,6 +98,40 @@ export function indicesFromPath(path: string): string[] {
   const first = clean.split("/")[0];
   if (!first || first.startsWith("_")) return [];
   return first.split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * The index names of the cluster.
+ *
+ * Used to suggest an index for the request path - searching the whole
+ * cluster when one index was meant is the most common mistake.
+ */
+export async function fetchIndexNames(conn: Connection): Promise<string[]> {
+  const r = await esGet(conn, "_cat/indices?format=json&h=index");
+  if (r.status >= 400) return [];
+  return ((r.json ?? []) as any[])
+    .map((x) => String(x?.index ?? ""))
+    .filter(Boolean)
+    .sort();
+}
+
+/**
+ * The indices whose name matches the text the user typed.
+ *
+ * The path input holds things like `my-index/_search`, so only the part
+ * before the first slash is matched.
+ */
+export function matchIndexNames(names: string[], text: string, limit = 20): string[] {
+  const q = text.trim().toLowerCase();
+  if (!q) return names.slice(0, limit);
+  const starts: string[] = [];
+  const contains: string[] = [];
+  for (const n of names) {
+    const lower = n.toLowerCase();
+    if (lower.startsWith(q)) starts.push(n);
+    else if (lower.includes(q)) contains.push(n);
+  }
+  return [...starts, ...contains].slice(0, limit);
 }
 
 // ---------------------------------------------------------------------------

@@ -633,6 +633,29 @@ h4 { margin: 0 0 7px; font-size: 12px; color: var(--muted); text-transform: uppe
 .cron-hint { display: block; font-size: 11px; color: var(--warn); margin-top: 5px; }
 
 .req-row { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+
+/* the path input with the index suggestions */
+.path-field { position: relative; flex: 1; min-width: 220px; }
+.path-field .input-grow { width: 100%; }
+.path-suggest {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+  list-style: none; margin: 0; padding: 4px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: var(--shadow-lg);
+  max-height: 260px; overflow-y: auto;
+}
+.path-suggest li { margin: 0; }
+.path-suggest button {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  width: 100%; padding: 5px 9px; border: none; border-radius: 5px;
+  background: transparent; cursor: pointer; text-align: left;
+  font-size: 12.5px; color: var(--text);
+}
+.path-suggest button:hover { background: var(--surface-2); }
+.path-suggest-name { font-family: var(--mono); }
+.path-suggest-hint {
+  font-size: 11px; color: var(--muted); font-family: var(--mono); flex-shrink: 0;
+}
 .code-editor {
   width: 100%; border: 1px solid var(--border); border-radius: 7px; padding: 8px;
   font-family: var(--mono); font-size: 12.5px; background: var(--surface);

@@ -8,8 +8,10 @@ import {
   FieldMap,
   LintHint,
   buildFieldMap,
+  fetchIndexNames,
   indicesFromPath,
   lintRequest,
+  matchIndexNames,
 } from "../lib/lint";
 import QueryEditor from "../components/QueryEditor";
 import QueryVisualizer from "../components/QueryVisualizer";
@@ -99,9 +101,50 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
   /** field name -> the values that really occur in the index */
   const [valueHints, setValueHints] = useState<Record<string, string[]>>({});
   const hintsLoading = useRef<string>("");
+  /** the index names of the cluster - offered while the path is edited */
+  const [indexNames, setIndexNames] = useState<string[]>([]);
+  const [pathOpen, setPathOpen] = useState(false);
 
   const targetIndices = useMemo(() => indicesFromPath(path), [path]);
   const targetKey = targetIndices.join(",");
+
+  // the index names, for the path suggestions
+  useEffect(() => {
+    let alive = true;
+    fetchIndexNames(conn).then((names) => {
+      if (alive) setIndexNames(names);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [conn]);
+
+  /** the text the user typed in the path, before the first slash */
+  const pathPrefix = useMemo(() => path.split("/")[0] ?? "", [path]);
+  const pathSuggestions = useMemo(
+    () => matchIndexNames(indexNames, pathPrefix),
+    [indexNames, pathPrefix]
+  );
+
+  /** the rest of the path, kept when an index is picked from the list */
+  const pathSuffix = useCallback(
+    () => {
+      const slash = path.indexOf("/");
+      const rest = slash >= 0 ? path.slice(slash + 1) : "search";
+      return `/_${rest}`;
+    },
+    [path]
+  );
+
+  const applyIndex = useCallback(
+    (indexName: string) => {
+      const slash = path.indexOf("/");
+      const rest = slash >= 0 ? path.slice(slash + 1) : "search";
+      setPath(`${indexName}/_${rest}`);
+      setPathOpen(false);
+    },
+    [path]
+  );
 
   // fetch the mapping (and the index settings) whenever the target changes
   useEffect(() => {
@@ -390,14 +433,36 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
           <select className={`input method-select ${METHOD_CLASS[method] ?? ""}`} value={method} onChange={(e) => setMethod(e.target.value)}>
             {["POST", "GET", "PUT", "DELETE", "HEAD"].map((m) => <option key={m}>{m}</option>)}
           </select>
-          <input
-            className="input input-grow"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            placeholder="path，如 _search 或 my-index/_doc/1"
-            list="es-common-paths"
-            onKeyDown={(e) => e.key === "Enter" && send()}
-          />
+          <div className="path-field">
+            <input
+              className="input input-grow"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+              onFocus={() => setPathOpen(true)}
+              onBlur={() => setTimeout(() => setPathOpen(false), 150)}
+              placeholder="path，如 _search 或 my-index/_doc/1"
+              list="es-common-paths"
+              onKeyDown={(e) => e.key === "Enter" && send()}
+            />
+            {pathOpen && pathSuggestions.length > 0 && (
+              <ul className="path-suggest">
+                {pathSuggestions.map((n) => (
+                  <li key={n}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        applyIndex(n);
+                      }}
+                    >
+                      <span className="path-suggest-name">{n}</span>
+                      <span className="path-suggest-hint">{pathSuffix()}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
           <datalist id="es-common-paths">
             {COMMON_PATHS.map((p) => <option key={p} value={p} />)}
           </datalist>
