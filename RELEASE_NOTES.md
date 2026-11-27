@@ -13,6 +13,39 @@ Elasticsearch 桌面客户端，elasticsearch-head 的 Tauri 2 + React 重写版
 
 ## 本次更新
 
+### 新增：复合查询的智能提醒
+
+写请求体时实时检查，把容易踩的坑直接指出来，分**错误 / 警告 / 提示**三级，
+有对应修法的还带一键修复按钮。
+
+会结合目标索引的真实 mapping 判断，所以能发现字段类型用错这类问题：
+
+**字段相关**
+- 字段不在 mapping 里 —— 拼错了，或者字段在别的索引
+- `term` 用在 `text` 字段上 —— text 被分词过，几乎匹配不到，要用 `match`
+- `match` 用在 `keyword` 字段上 —— keyword 不分词，精确匹配该用 `term`
+- keyword 字段上用 match 匹配带空格的词 —— 会被拆成多个词元，匹配不到
+- `wildcard` / `regexp` / `prefix` 用在 keyword 上 —— 遍历所有词元，很慢
+- `range` 用在 text 字段上 —— 没有意义
+- date 字段上的范围值不像日期格式
+- `exists` 查询的字段不在 mapping 里 —— 永远匹配不到
+- `sort` 用在关掉了 doc_values 的字段上 —— 会直接报错
+
+**分页与性能**
+- `from + size` 超过 `max_result_window` —— ES 会拒绝这个请求（错误级）
+- `size` 偏大
+- 没设置 `track_total_hits` —— 总数最多只到 10000（可一键加上）
+- 没有过滤 `_source` —— 整个文档都拉回来
+- 路径里没指定索引 —— 会搜全部索引
+- `must` 里只做过滤的子句 —— 挪到 `filter` 里能命中 filter cache
+- 脚本查询 —— 不能被缓存，还有注入风险
+
+**其它**
+- JSON 语法错误、索引不存在
+- `filtered` 查询在 ES 7 已被删除
+- `indices_boost` 在 ES 5 之后被移除
+- `match_all` 上的 boost 没有意义
+
 ### 新增：快照管理
 
 顶栏新增「快照」页，三个页签：
