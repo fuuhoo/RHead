@@ -112,7 +112,7 @@ jobs:
           EOF
 
       - name: Build
-        run: npm run tauri build
+        run: npm run tauri build -- --target ${{ matrix.target }}
 
       # Collect the installers so the publish job can attach them to a
       # single release. Building and publishing are separate jobs on purpose:
@@ -129,13 +129,15 @@ jobs:
           # macOS: also ship the .app bundle as a tar.gz. The name must carry
           # the target - both macOS jobs build an app called RHead.app and
           # would otherwise produce the same tarball name.
-          for app in src-tauri/target/*/release/bundle/macos/*.app; do
+          for app in src-tauri/target/*/release/bundle/macos/*.app \
+                     src-tauri/target/release/bundle/macos/*.app; do
             [ -e "$app" ] || continue
             # src-tauri/target/<target>/release/bundle/macos/RHead.app
             raw="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$app")")")")")"
             case "$raw" in
               x86_64-apple-darwin) target="x64" ;;
               aarch64-apple-darwin) target="aarch64" ;;
+              release) target="${{ matrix.target }}" ;;
               *) target="$raw" ;;
             esac
             tar -czf "installers/RHead_${target}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
@@ -148,6 +150,24 @@ jobs:
           name: installers-${{ matrix.target }}
           path: installers/
           if-no-files-found: error
+
+      # A wrong --target silently builds the host architecture, which would
+      # publish an aarch64 package under the x64 name. Fail loudly instead.
+      - name: Verify the target architecture
+        shell: bash
+        run: |
+          set -e
+          case "${{ matrix.target }}" in
+            x86_64-apple-darwin)
+              ls installers/RHead_*_x64.dmg >/dev/null || { echo "::error::the x64 dmg is missing"; ls -la installers; exit 1; }
+              ls installers/RHead_x64.app.tar.gz >/dev/null || { echo "::error::the x64 app bundle is missing"; ls -la installers; exit 1; }
+              ;;
+            aarch64-apple-darwin)
+              ls installers/RHead_*_aarch64.dmg >/dev/null || { echo "::error::the aarch64 dmg is missing"; ls -la installers; exit 1; }
+              ls installers/RHead_aarch64.app.tar.gz >/dev/null || { echo "::error::the aarch64 app bundle is missing"; ls -la installers; exit 1; }
+              ;;
+          esac
+          echo "architectures verified"
 
   publish:
     name: Publish Release
@@ -168,6 +188,30 @@ jobs:
 
       - name: List installers
         run: ls -la installers
+
+      # Every platform must contribute its own files - a missing one means a
+      # build silently produced the wrong architecture.
+      - name: Verify all platforms are present
+        shell: bash
+        run: |
+          set -e
+          for f in \
+            RHead_*_x64_en-US.msi \
+            RHead_*_x64-setup.exe \
+            RHead_*_x64.dmg \
+            RHead_*_aarch64.dmg \
+            RHead_*_amd64.deb \
+            RHead-*-1.x86_64.rpm \
+            RHead_*_amd64.AppImage \
+            RHead_x64.app.tar.gz \
+            RHead_aarch64.app.tar.gz ; do
+            if ! compgen -G "installers/$f" > /dev/null; then
+              echo "::error::missing $f"
+              ls -la installers
+              exit 1
+            fi
+          done
+          echo "all 9 installers present"
 
       # A single job creates the release, so there is exactly one release per
       # tag no matter how many platforms were built.
