@@ -369,9 +369,7 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
           infoCount={hintCounts.info}
           onApply={(patch) => {
             try {
-              const next = JSON.stringify(patch, null, 2);
-              setBody(next);
-              if (pretty) setBody(next);
+              setBody(JSON.stringify(patch, null, 2));
             } catch (e: any) {
               setError(e.message);
             }
