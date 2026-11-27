@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Connection, esRequest, esGet, friendlyError } from "../lib/es";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Connection, esRequest, esGet, esPost, friendlyError } from "../lib/es";
 import { clampTimeout, loadTimeout, saveTimeout } from "../lib/timeout";
 import { columnStoreKey } from "../lib/columns";
+import { EditorCtx } from "../lib/esDsl";
 import {
   DEFAULT_MAX_RESULT_WINDOW,
   FieldMap,
@@ -95,6 +96,9 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
   const [maxResultWindow, setMaxResultWindow] = useState(DEFAULT_MAX_RESULT_WINDOW);
   const [mappingKnown, setMappingKnown] = useState(false);
   const mappingKey = useRef("");
+  /** field name -> the values that really occur in the index */
+  const [valueHints, setValueHints] = useState<Record<string, string[]>>({});
+  const hintsLoading = useRef<string>("");
 
   const targetIndices = useMemo(() => indicesFromPath(path), [path]);
   const targetKey = targetIndices.join(",");
@@ -158,6 +162,69 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
         mappingKnown,
       }),
     [body, path, fields, targetIndices, indexExists, maxResultWindow, mappingKnown]
+  );
+
+  /** the fields of the target index, in the shape the editor wants */
+  const editorFields = useMemo(
+    () => Object.entries(fields).map(([name, f]) => ({ name, type: f.type })),
+    [fields]
+  );
+
+  /**
+   * Load the values that occur in the index for the field the caret is on.
+   *
+   * A terms aggregation is used - it reads the doc values and is cheap even
+   * on a big index. Text fields have no doc values, so their keyword
+   * subfield is used instead.
+   */
+  const loadFieldValues = useCallback(
+    async (field: string) => {
+      if (!field || !targetKey) return;
+      if (valueHints[field]) return;
+      if (hintsLoading.current === field) return;
+      hintsLoading.current = field;
+
+      const info = fields[field];
+      // a text field cannot be aggregated - use its keyword subfield
+      let aggField = field;
+      if (info?.type === "text") {
+        const kw = `${field}.keyword`;
+        if (fields[kw]) aggField = kw;
+        else {
+          hintsLoading.current = "";
+          return;
+        }
+      }
+
+      try {
+        const q = {
+          size: 0,
+          aggs: { v: { terms: { field: aggField, size: 30 } } },
+        };
+        const r = await esPost(conn, `${encodeURIComponent(targetKey)}/_search`, q, timeoutSec);
+        const buckets = r.json?.aggregations?.v?.buckets;
+        if (Array.isArray(buckets) && buckets.length) {
+          const vals = buckets.map((b: any) => String(b.key));
+          setValueHints((h) => (h[field] ? h : { ...h, [field]: vals }));
+        }
+      } catch {
+        /* the aggregation failed - no values to offer */
+      } finally {
+        if (hintsLoading.current === field) hintsLoading.current = "";
+      }
+    },
+    [conn, targetKey, fields, valueHints, timeoutSec]
+  );
+
+  // the caret context decides which field the values are needed for
+  const onEditorContext = useCallback(
+    (ctx: EditorCtx) => {
+      if (ctx.expecting !== "value" || !ctx.parentKey) return;
+      const field = ctx.parentKey;
+      if (!fields[field]) return;
+      loadFieldValues(field);
+    },
+    [fields, loadFieldValues]
   );
 
   const hintCounts = useMemo(() => {
@@ -358,6 +425,9 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
         <QueryEditor
           value={body}
           onChange={setBody}
+          fields={editorFields}
+          valueHints={valueHints}
+          onContextChange={onEditorContext}
           height={220}
           label="请求体 JSON（Ctrl+Enter 提交）"
           onSubmit={() => send()}

@@ -464,13 +464,35 @@ function pathEnds(path: string[], ...suffix: string[]): boolean {
 /**
  * Compute suggestions for a caret context. `fields` supplies mapping field
  * names (from the selected index) used in field-position contexts.
+ *
+ * `valueHints` maps a field name to the values that actually occur in the
+ * index - they are offered when the caret is at a value position for that
+ * field, which turns the completion into something the data knows about.
  */
-export function getSuggestions(ctx: EditorCtx, fields?: FieldInfo[]): Suggestion[] {
+export function getSuggestions(
+  ctx: EditorCtx,
+  fields?: FieldInfo[],
+  valueHints?: Record<string, string[]>
+): Suggestion[] {
   const { expecting, keyStack: path, parentKey, inArray, partial } = ctx;
   if (expecting === "none") return [];
 
   const partialFieldKey = fieldKeySuggs(fields, partial);
   const partialFieldValue = fieldValueSuggs(fields, partial);
+
+  // ---- a value for a known field ------------------------------------------
+  // the caret sits inside the value of "field": "..." - offer the values that
+  // really occur in the index
+  if (expecting === "value" && parentKey && valueHints?.[parentKey]?.length) {
+    const p = partial.trim().toLowerCase();
+    const out: Suggestion[] = [];
+    for (const v of valueHints[parentKey]) {
+      if (p && !v.toLowerCase().includes(p)) continue;
+      out.push({ label: v, detail: "索引里的实际值", kind: "value", insert: `"${v}"` });
+      if (out.length >= MAX_FIELD_SUGGS) break;
+    }
+    if (out.length) return out;
+  }
 
   // ---- key position -------------------------------------------------------
   if (expecting === "key") {

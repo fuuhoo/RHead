@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { analyzeContext, getSuggestions, Suggestion } from "../lib/esDsl";
+import { EditorCtx, analyzeContext, getSuggestions, Suggestion } from "../lib/esDsl";
 import { highlightJson } from "../lib/jsonHighlight";
 
 // JSON DSL editor with ES-aware autocomplete:
@@ -11,6 +11,10 @@ interface Props {
   value: string;
   onChange: (v: string) => void;
   fields?: { name: string; type: string }[];
+  /** field name -> the values that actually occur in the index */
+  valueHints?: Record<string, string[]>;
+  /** called whenever the caret context changes, so the page can load values */
+  onContextChange?: (ctx: EditorCtx) => void;
   height?: number;
   placeholder?: string;
   label?: string;
@@ -26,6 +30,8 @@ export default function QueryEditor({
   value,
   onChange,
   fields,
+  valueHints,
+  onContextChange,
   height = 220,
   placeholder,
   label,
@@ -70,9 +76,10 @@ export default function QueryEditor({
     (text: string, pos: number, force = false) => {
       setCaret(pos);
       const ctx = analyzeContext(text, pos);
+      onContextChange?.(ctx);
       let list: Suggestion[] = [];
       if (force || ctx.expecting !== "none") {
-        list = getSuggestions(ctx, fields);
+        list = getSuggestions(ctx, fields, valueHints);
       }
       if (list.length) {
         setItems(list);
@@ -83,8 +90,27 @@ export default function QueryEditor({
         setItems([]);
       }
     },
-    [fields]
+    // valueHints is part of the identity: new values have to re-run the
+    // suggestion engine so the dropdown picks them up
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [fields, valueHints, onContextChange]
   );
+
+  // the values arrive after the editor asked for them - re-run the
+  // suggestion engine so the dropdown picks them up
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const ctx = analyzeContext(ta.value, caret);
+    const list = getSuggestions(ctx, fields, valueHints);
+    if (list.length) {
+      setItems(list);
+      setActive(0);
+      setOpen(true);
+    } else if (!ctx.inString) {
+      setOpen(false);
+    }
+  }, [valueHints, caret, fields]);
 
   useEffect(() => {
     // Reposition caret after programmatic value changes (auto-pairs, accepts)
