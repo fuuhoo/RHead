@@ -51,15 +51,6 @@ export interface EsRole {
   transient_metadata?: Record<string, any>;
 }
 
-/** A role mapping: rules that grant a set of roles to matching users. */
-export interface EsRoleMapping {
-  enabled: boolean;
-  roles: string[];
-  rules: Record<string, any>;
-  metadata?: Record<string, any>;
-  reserved?: boolean;
-}
-
 /** Result of GET /_security/_authenticate - who am I. */
 export interface EsAuthInfo {
   username: string;
@@ -247,18 +238,6 @@ export async function fetchRoles(conn: Connection): Promise<Record<string, EsRol
   return out;
 }
 
-/** GET /_security/role_mapping -> { name: EsRoleMapping } */
-export async function fetchRoleMappings(conn: Connection): Promise<Record<string, EsRoleMapping>> {
-  const r = await esGet(conn, "_security/role_mapping");
-  ensureOk(r, "获取角色映射列表");
-  const raw = (r.json ?? {}) as Record<string, EsRoleMapping>;
-  const out: Record<string, EsRoleMapping> = {};
-  for (const [name, m] of Object.entries(raw)) {
-    out[name] = { ...m, reserved: m.metadata?._reserved === true };
-  }
-  return out;
-}
-
 export interface UserPayload {
   password?: string;
   roles?: string[];
@@ -303,27 +282,6 @@ export async function putRole(conn: Connection, name: string, payload: RolePaylo
 /** DELETE /_security/role/<name> */
 export async function deleteRole(conn: Connection, name: string): Promise<EsResult> {
   return esDelete(conn, `_security/role/${enc(name)}`);
-}
-
-export interface RoleMappingPayload {
-  enabled?: boolean;
-  roles?: string[];
-  rules?: Record<string, any>;
-  metadata?: Record<string, any>;
-}
-
-/** PUT /_security/role_mapping/<name> */
-export async function putRoleMapping(
-  conn: Connection,
-  name: string,
-  payload: RoleMappingPayload
-): Promise<EsResult> {
-  return esPut(conn, `_security/role_mapping/${enc(name)}`, payload);
-}
-
-/** DELETE /_security/role_mapping/<name> */
-export async function deleteRoleMapping(conn: Connection, name: string): Promise<EsResult> {
-  return esDelete(conn, `_security/role_mapping/${enc(name)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -472,20 +430,3 @@ export function indexNamesFor(text: string): string[] {
   const pats = parseIndexPatterns(text);
   return pats.length ? pats : ["*"];
 }
-
-/**
- * The rule shapes ES accepts for a role mapping.
- *
- * ES 7.x only understands a single `field` rule here - `{"field":{"match":"x"}}`,
- * `{"field":{"regex":"x"}}` or `{"field":{"exclude":"x"}}` - and refuses a
- * second key inside `field`. Metadata rules (`username`, `groups`, `dn`) are
- * rejected by ES 7.17 unless a realm provides them, so they are only
- * reachable through the "advanced" raw JSON mode.
- */
-export const MAPPING_RULE_MODES = [
-  { key: "match", label: "通配匹配", hint: '如 team_*（* 通配）', template: { field: { match: "*" } } },
-  { key: "regex", label: "正则匹配", hint: "如 ^team-.*", template: { field: { regex: "^.*$" } } },
-  { key: "exclude", label: "排除匹配", hint: "如 admin（匹配到但排除）", template: { field: { exclude: "*" } } },
-] as const;
-
-export type MappingRuleMode = "match" | "regex" | "exclude" | "advanced";

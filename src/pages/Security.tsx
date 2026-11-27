@@ -3,19 +3,15 @@ import { Connection, errorText, friendlyError } from "../lib/es";
 import {
   CLUSTER_PRIVILEGE_GROUPS,
   EsRole,
-  EsRoleMapping,
   EsUser,
   INDEX_PRIVILEGE_GROUPS,
-  MAPPING_RULE_MODES,
   PrivilegeGroup,
   SECURITY_DISABLED_MESSAGE,
   deleteRole,
-  deleteRoleMapping,
   deleteUser,
   describeIndexPrivilege,
   effectivePermissions,
   fetchAuthInfo,
-  fetchRoleMappings,
   fetchRoles,
   fetchUsers,
   flattenPrivileges,
@@ -24,7 +20,6 @@ import {
   parseIndexPatterns,
   probeSecurityEnabled,
   putRole,
-  putRoleMapping,
   putUser,
   setPassword,
   summarizeRole,
@@ -35,43 +30,24 @@ import Drawer from "../components/Drawer";
 import JsonView from "../components/JsonView";
 import Modal from "../components/Modal";
 
-type Tab = "users" | "roles" | "mappings";
-
-/**
- * Work out which rule shape an existing role mapping uses, so the editor can
- * show it instead of replacing it with the default on save.
- */
-function parseRules(rules?: Record<string, any>): { mode: string; pattern: string; raw: string } {
-  const raw = rules ? JSON.stringify(rules) : "";
-  const field = rules?.field;
-  if (field && typeof field === "object") {
-    if (typeof field.match === "string") return { mode: "match", pattern: field.match, raw };
-    if (typeof field.regex === "string") return { mode: "regex", pattern: field.regex, raw };
-    if (typeof field.exclude === "string") return { mode: "exclude", pattern: field.exclude, raw };
-  }
-  // anything else (metadata rules, match_all, ...) is kept as raw JSON
-  return { mode: "advanced", pattern: raw || '{\n  "field": { "match": "*" }\n}', raw };
-}
+type Tab = "users" | "roles";
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
   { id: "users", label: "用户", icon: "👤" },
   { id: "roles", label: "角色权限", icon: "🔑" },
-  { id: "mappings", label: "角色映射", icon: "🔗" },
 ];
 
 export default function Security({ conn }: { conn: Connection }) {
   const [tab, setTab] = useState<Tab>("users");
   const [users, setUsers] = useState<Record<string, EsUser>>({});
   const [roles, setRoles] = useState<Record<string, EsRole>>({});
-  const [mappings, setMappings] = useState<Record<string, EsRoleMapping>>({});
   const [whoami, setWhoami] = useState<{ username: string; roles: string[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   /**
-   * The cluster runs without xpack.security - there are no users, roles or
-   * mappings to manage, so the page explains that instead of showing an
-   * error.
+   * The cluster runs without xpack.security - there are no users or roles to
+   * manage, so the page explains that instead of showing an error.
    */
   const [securityOff, setSecurityOff] = useState(false);
 
@@ -86,18 +62,12 @@ export default function Security({ conn }: { conn: Connection }) {
         setSecurityOff(true);
         setUsers({});
         setRoles({});
-        setMappings({});
         return;
       }
       setSecurityOff(false);
-      const [u, r, m] = await Promise.all([
-        fetchUsers(conn),
-        fetchRoles(conn),
-        fetchRoleMappings(conn),
-      ]);
+      const [u, r] = await Promise.all([fetchUsers(conn), fetchRoles(conn)]);
       setUsers(u);
       setRoles(r);
-      setMappings(m);
     } catch (e: any) {
       // the cluster may have been switched off while the page was open
       const text = friendlyError(e, conn);
@@ -181,7 +151,7 @@ export default function Security({ conn }: { conn: Connection }) {
           <button key={t.id} className={tab === t.id ? "on" : ""} onClick={() => setTab(t.id)} role="tab">
             {t.label}
             <span className="sec-tab-count">
-              {t.id === "users" ? Object.keys(users).length : t.id === "roles" ? Object.keys(roles).length : Object.keys(mappings).length}
+              {t.id === "users" ? Object.keys(users).length : Object.keys(roles).length}
             </span>
           </button>
         ))}
@@ -192,9 +162,6 @@ export default function Security({ conn }: { conn: Connection }) {
       )}
       {tab === "roles" && (
         <RolesTab conn={conn} roles={roles} users={users} reload={reload} setMsg={setMsg} setError={setError} />
-      )}
-      {tab === "mappings" && (
-        <MappingsTab conn={conn} mappings={mappings} roles={roles} reload={reload} setMsg={setMsg} setError={setError} />
       )}
     </div>
   );
@@ -224,6 +191,7 @@ function UsersTab({
   const [creating, setCreating] = useState(false);
   const [pwFor, setPwFor] = useState<string | null>(null);
   const [detail, setDetail] = useState<EsUser | null>(null);
+  const [assignFor, setAssignFor] = useState<EsUser | null>(null);
 
   const list = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -306,6 +274,14 @@ function UsersTab({
                 </td>
                 <td className="sec-actions">
                   <button className="btn btn-xs" onClick={() => setDetail(u)}>详情</button>
+                  <button
+                    className="btn btn-xs"
+                    onClick={() => setAssignFor(u)}
+                    disabled={!!u.reserved}
+                    title={u.reserved ? "内置账号不可修改角色" : "分配角色"}
+                  >
+                    分配角色
+                  </button>
                   <button className="btn btn-xs" onClick={() => setEditing(u)} disabled={!!u.reserved}
                     title={u.reserved ? "内置账号不可修改（只能改密码）" : "编辑用户"}>
                     编辑
@@ -332,7 +308,6 @@ function UsersTab({
       {(creating || editing) && (
         <UserForm
           conn={conn}
-          roles={roles}
           user={editing}
           onClose={() => {
             setCreating(false);
@@ -341,6 +316,21 @@ function UsersTab({
           onDone={(text) => {
             setCreating(false);
             setEditing(null);
+            setMsg(text);
+            reload();
+          }}
+          onError={setError}
+        />
+      )}
+
+      {assignFor && (
+        <AssignRolesDialog
+          conn={conn}
+          user={assignFor}
+          roles={roles}
+          onClose={() => setAssignFor(null)}
+          onDone={(text) => {
+            setAssignFor(null);
             setMsg(text);
             reload();
           }}
@@ -452,14 +442,12 @@ function EffectivePermissionsPanel({
 
 function UserForm({
   conn,
-  roles,
   user,
   onClose,
   onDone,
   onError,
 }: {
   conn: Connection;
-  roles: Record<string, EsRole>;
   user: EsUser | null;
   onClose: () => void;
   onDone: (msg: string) => void;
@@ -472,22 +460,16 @@ function UserForm({
   const [fullName, setFullName] = useState(user?.full_name ?? "");
   const [email, setEmail] = useState(user?.email ?? "");
   const [enabled, setEnabled] = useState(user?.enabled ?? true);
-  const [picked, setPicked] = useState<string[]>(user?.roles ?? []);
-  const [roleFilter, setRoleFilter] = useState("");
   const [busy, setBusy] = useState(false);
-
-  const roleNames = useMemo(() => {
-    const q = roleFilter.trim().toLowerCase();
-    return Object.keys(roles)
-      .filter((r) => !q || r.toLowerCase().includes(q))
-      .sort();
-  }, [roles, roleFilter]);
 
   async function save() {
     setBusy(true);
     onError("");
     const payload: any = {
-      roles: picked,
+      // the roles are managed by the separate "分配角色" dialog - PUT is a
+      // full replace, so the current roles have to be sent along or the
+      // assignment would be wiped
+      roles: user?.roles ?? [],
       full_name: fullName,
       email,
       enabled,
@@ -554,9 +536,84 @@ function UserForm({
         启用该账号
       </label>
 
+      <div className="modal-actions">
+        <button className="btn btn-primary" onClick={save} disabled={busy || nameInvalid || pwMismatch || pwTooShort}>
+          {busy ? "保存中…" : editing ? "保存" : "创建"}
+        </button>
+        <button className="btn btn-ghost" onClick={onClose}>取消</button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Assign roles to a user.
+ *
+ * This is deliberately a separate dialog instead of a section of the user
+ * editor: assigning roles is the frequent operation, editing name / email /
+ * password is the rare one. It also keeps the user form short.
+ *
+ * PUT /_security/user replaces the whole definition, so the other fields
+ * have to be sent along unchanged.
+ */
+function AssignRolesDialog({
+  conn,
+  user,
+  roles,
+  onClose,
+  onDone,
+  onError,
+}: {
+  conn: Connection;
+  user: EsUser;
+  roles: Record<string, EsRole>;
+  onClose: () => void;
+  onDone: (msg: string) => void;
+  onError: (s: string) => void;
+}) {
+  const [picked, setPicked] = useState<string[]>(user.roles ?? []);
+  const [roleFilter, setRoleFilter] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const roleNames = useMemo(() => {
+    const q = roleFilter.trim().toLowerCase();
+    return Object.keys(roles)
+      .filter((r) => !q || r.toLowerCase().includes(q))
+      .sort();
+  }, [roles, roleFilter]);
+
+  const changed = useMemo(() => {
+    const before = [...(user.roles ?? [])].sort();
+    const after = [...picked].sort();
+    return before.length !== after.length || before.some((r, i) => r !== after[i]);
+  }, [picked, user.roles]);
+
+  async function save() {
+    setBusy(true);
+    onError("");
+    try {
+      // PUT is a full replace - keep everything else as it was
+      const r = await putUser(conn, user.username, {
+        roles: picked,
+        full_name: user.full_name ?? "",
+        email: user.email ?? "",
+        enabled: user.enabled,
+        metadata: user.metadata ?? {},
+      });
+      setBusy(false);
+      if (r.status < 300) onDone(`用户 ${user.username} 的角色已更新`);
+      else onError(errorText(r));
+    } catch (e: any) {
+      setBusy(false);
+      onError(friendlyError(e, conn));
+    }
+  }
+
+  return (
+    <Modal title={`分配角色 · ${user.username}`} onClose={onClose} width={620}>
       <div className="sec-field">
         <div className="sec-field-head">
-          <span>分配角色</span>
+          <span>选择角色</span>
           <input
             className="input input-sm"
             placeholder="搜索角色…"
@@ -582,22 +639,23 @@ function UserForm({
           {!roleNames.length && <div className="field-empty">无匹配角色</div>}
         </div>
         <div className="field-hint">已选：{picked.length ? picked.join(", ") : "无"}</div>
-        {/* what the selected roles actually grant - the user -> role -> privilege chain */}
-        {picked.length > 0 && (
-          <div className="sec-role-preview">
-            {picked.map((r) => (
-              <div className="sec-role-preview-row" key={r}>
-                <span className="sec-role-preview-name">{r}</span>
-                <span className="sec-role-preview-desc">{summarizeRole(roles[r])}</span>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
 
+      {/* what the selected roles actually grant - the user -> role -> privilege chain */}
+      {picked.length > 0 && (
+        <div className="sec-role-preview">
+          {picked.map((r) => (
+            <div className="sec-role-preview-row" key={r}>
+              <span className="sec-role-preview-name">{r}</span>
+              <span className="sec-role-preview-desc">{summarizeRole(roles[r])}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="modal-actions">
-        <button className="btn btn-primary" onClick={save} disabled={busy || nameInvalid || pwMismatch || pwTooShort}>
-          {busy ? "保存中…" : editing ? "保存" : "创建"}
+        <button className="btn btn-primary" onClick={save} disabled={busy || !changed}>
+          {busy ? "保存中…" : "保存"}
         </button>
         <button className="btn btn-ghost" onClick={onClose}>取消</button>
       </div>
@@ -1118,269 +1176,5 @@ function PrivilegePicker({
         </div>
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Role mappings
-// ---------------------------------------------------------------------------
-
-function MappingsTab({
-  conn,
-  mappings,
-  roles,
-  reload,
-  setMsg,
-  setError,
-}: {
-  conn: Connection;
-  mappings: Record<string, EsRoleMapping>;
-  roles: Record<string, EsRole>;
-  reload: () => Promise<void>;
-  setMsg: (s: string) => void;
-  setError: (s: string) => void;
-}) {
-  const [editing, setEditing] = useState<EsRoleMapping | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [editName, setEditName] = useState("");
-
-  const list = useMemo(() => Object.keys(mappings).sort(), [mappings]);
-
-  async function remove(name: string) {
-    if (!window.confirm(`确定删除角色映射「${name}」？`)) return;
-    setError("");
-    try {
-      const r = await deleteRoleMapping(conn, name);
-      setMsg(r.status < 300 ? `角色映射 ${name} 已删除` : errorText(r));
-      if (r.status < 300) reload();
-    } catch (e: any) {
-      setError(friendlyError(e, conn));
-    }
-  }
-
-  return (
-    <>
-      <div className="h3-row">
-        <h3>角色映射 ({list.length})</h3>
-        <button className="btn btn-xs" onClick={() => setCreating(true)}>＋ 新建映射</button>
-      </div>
-      <div className="field-hint" style={{ marginBottom: 8 }}>
-        角色映射按规则（用户名 / 组 / DN 等）给一批用户批量授予角色。
-      </div>
-
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>名称</th>
-              <th>授予角色</th>
-              <th>规则</th>
-              <th>状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((name) => {
-              const m = mappings[name];
-              return (
-                <tr key={name}>
-                  <td><b>{name}</b></td>
-                  <td className="sec-roles">
-                    {(m.roles ?? []).map((r) => <span className="tag" key={r}>{r}</span>)}
-                  </td>
-                  <td className="sec-rules">
-                    <code>{JSON.stringify(m.rules ?? {})}</code>
-                  </td>
-                  <td>{m.enabled ? <span className="tag tag-ok">启用</span> : <span className="tag tag-off">停用</span>}</td>
-                  <td className="sec-actions">
-                    <button className="btn btn-xs" onClick={() => { setEditing(m); setEditName(name); }}>编辑</button>
-                    <button className="btn btn-xs btn-danger" onClick={() => remove(name)}>删除</button>
-                  </td>
-                </tr>
-              );
-            })}
-            {!list.length && (
-              <tr>
-                <td colSpan={5} className="muted" style={{ textAlign: "center", padding: 20 }}>没有角色映射</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {(creating || editing) && (
-        <MappingForm
-          conn={conn}
-          roles={roles}
-          mapping={editing}
-          mappingName={editName}
-          onClose={() => {
-            setCreating(false);
-            setEditing(null);
-          }}
-          onDone={(text) => {
-            setCreating(false);
-            setEditing(null);
-            setMsg(text);
-            reload();
-          }}
-          onError={setError}
-        />
-      )}
-    </>
-  );
-}
-
-function MappingForm({
-  conn,
-  roles,
-  mapping,
-  mappingName,
-  onClose,
-  onDone,
-  onError,
-}: {
-  conn: Connection;
-  roles: Record<string, EsRole>;
-  mapping: EsRoleMapping | null;
-  mappingName: string;
-  onClose: () => void;
-  onDone: (msg: string) => void;
-  onError: (s: string) => void;
-}) {
-  const editing = !!mapping;
-  const [name, setName] = useState(mappingName);
-  const [enabled, setEnabled] = useState(mapping?.enabled ?? true);
-  const [picked, setPicked] = useState<string[]>(mapping?.roles ?? []);
-  // an existing mapping must keep its own rule shape - editing it may not
-  // silently rewrite it to the default "field match"
-  const parsed = parseRules(mapping?.rules);
-  const [mode, setMode] = useState(parsed.mode);
-  const [pattern, setPattern] = useState(parsed.pattern);
-  // only rebuild the rule when the user actually touches it - otherwise the
-  // original rule (which may use a shape the editor does not offer) is kept
-  const [rulesTouched, setRulesTouched] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  const roleNames = Object.keys(roles).sort();
-
-  function buildRules(): Record<string, any> {
-    if (editing && !rulesTouched) return mapping?.rules ?? { field: { match: "*" } };
-    if (mode === "advanced") {
-      // the raw JSON is validated by ES - send it through untouched
-      try {
-        return JSON.parse(pattern);
-      } catch {
-        return { field: { match: "*" } };
-      }
-    }
-    const p = pattern.trim();
-    return { field: { [mode]: p } };
-  }
-
-  async function save() {
-    setBusy(true);
-    onError("");
-    try {
-      const r = await putRoleMapping(conn, name.trim(), {
-        enabled,
-        roles: picked,
-        rules: buildRules(),
-        metadata: mapping?.metadata ?? {},
-      });
-      setBusy(false);
-      if (r.status < 300) onDone(editing ? `角色映射 ${name} 已更新` : `角色映射 ${name} 已创建`);
-      else onError(errorText(r));
-    } catch (e: any) {
-      setBusy(false);
-      onError(friendlyError(e, conn));
-    }
-  }
-
-  return (
-    <Modal title={editing ? "编辑角色映射" : "新建角色映射"} onClose={onClose} width={620}>
-      <label>
-        名称
-        <input className="input" autoFocus value={name} disabled={editing} onChange={(e) => setName(e.target.value)} placeholder="如 ops_team" />
-      </label>
-      <label className="builder-toggle" style={{ marginLeft: 0 }}>
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        启用该映射
-      </label>
-
-      <div className="sec-field">
-        <div className="sec-field-head"><span>授予角色</span></div>
-        <div className="sec-role-picker">
-          {roleNames.map((r) => {
-            const on = picked.includes(r);
-            return (
-              <button key={r} className={`sec-role-chip ${on ? "on" : ""}`} onClick={() => setPicked((p) => (on ? p.filter((x) => x !== r) : [...p, r]))}>
-                {on ? "✓ " : ""}
-                {r}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="sec-field">
-        <div className="sec-field-head"><span>匹配规则</span></div>
-        <select
-          className="input"
-          value={mode}
-          onChange={(e) => {
-            const next = e.target.value;
-            setMode(next);
-            setRulesTouched(true);
-            if (next !== "advanced") {
-              const tpl = MAPPING_RULE_MODES.find((m) => m.key === next);
-              if (tpl) setPattern((tpl.template as any).field[next]);
-            } else {
-              setPattern('{\n  "field": { "match": "*" }\n}');
-            }
-          }}
-        >
-          {MAPPING_RULE_MODES.map((m) => (
-            <option key={m.key} value={m.key}>{m.label}</option>
-          ))}
-          <option value="advanced">高级（手写 JSON）</option>
-        </select>
-        {mode === "advanced" ? (
-          <textarea
-            className="input code-editor"
-            rows={5}
-            value={pattern}
-            onChange={(e) => {
-              setPattern(e.target.value);
-              setRulesTouched(true);
-            }}
-            spellCheck={false}
-          />
-        ) : (
-          <input
-            className="input"
-            value={pattern}
-            onChange={(e) => {
-              setPattern(e.target.value);
-              setRulesTouched(true);
-            }}
-            placeholder={MAPPING_RULE_MODES.find((m) => m.key === mode)?.hint}
-          />
-        )}
-        <div className="field-hint">
-          生成的规则：<code>{JSON.stringify(buildRules())}</code>
-          {mode !== "advanced" && (
-            <span className="muted">（ES 7.x 只支持 field 规则；组/DN 等元数据规则需用高级模式手写）</span>
-          )}
-        </div>
-      </div>
-
-      <div className="modal-actions">
-        <button className="btn btn-primary" onClick={save} disabled={busy || !name.trim() || !picked.length}>
-          {busy ? "保存中…" : editing ? "保存" : "创建"}
-        </button>
-        <button className="btn btn-ghost" onClick={onClose}>取消</button>
-      </div>
-    </Modal>
   );
 }
