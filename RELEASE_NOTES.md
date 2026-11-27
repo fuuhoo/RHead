@@ -1,4 +1,4 @@
-RHead v0.2.0
+RHead v0.3.0
 
 Elasticsearch 桌面客户端，elasticsearch-head 的 Tauri 2 + React 重写版。
 
@@ -6,30 +6,33 @@ Elasticsearch 桌面客户端，elasticsearch-head 的 Tauri 2 + React 重写版
 
 | 平台 | 文件 |
 |---|---|
-| Windows x64 | `RHead_0.2.0_x64_en-US.msi` 或 `RHead_0.2.0_x64-setup.exe` |
-| macOS Intel | `RHead_0.2.0_x64.dmg` |
-| macOS Apple Silicon | `RHead_0.2.0_aarch64.dmg` |
-| Linux x64 | `RHead_0.2.0_amd64.deb` / `RHead-0.2.0-1.x86_64.rpm` / `RHead_0.2.0_amd64.AppImage` |
+| Windows x64 | `RHead_0.3.0_x64_en-US.msi` 或 `RHead_0.3.0_x64-setup.exe` |
+| macOS Intel | `RHead_0.3.0_x64.dmg` |
+| macOS Apple Silicon | `RHead_0.3.0_aarch64.dmg` |
+| Linux x64 | `RHead_0.3.0_amd64.deb` / `RHead-0.3.0-1.x86_64.rpm` / `RHead_0.3.0_amd64.AppImage` |
 
 ## 本次更新
 
-### 结果表格
-
-- **表头固定**，向下滚动时列名始终可见
-- **横向滚动条常驻**在可见行下方，不必滚过整个表格才找得到
-- **列名保留原始大小写** —— ES 字段名大小写敏感，`cellCraftId` 不再被显示成 `CELLRAFTID`
-- **列显示/隐藏**：勾选列、显示全部、仅显示关键列、单列「只看」
-- **列的显示状态按索引持久化**，刷新页面或下次打开自动恢复
-- 列设置面板增加**列名筛选框**，列多时快速定位
-
 ### 结构化查询
 
-- **查询语句改为右侧抽屉**，不再占用主区域，表格区域占比从 39% 提升到 55%
-- 显示所选索引的**文档总数**，与命中数对照
+- **精确的命中总数** —— 之前 ES 默认把命中数截断在 10000，页数也跟着算错
+  （33 万条的索引只显示 200 页，实际是 6753 页）。现在请求带上
+  `track_total_hits`，命中数和页数都是准确的
+- **导出符合筛选条件的数据** —— 导出的就是筛选命中的全部文档，不只是当前页。
+  对话框里显示筛选条件摘要和精确命中数
 
-### 概览页
+### 修复
 
-- 索引列表增加**刷新按钮**，只请求 `_stats` 重读各索引的文档数与大小，不刷新整个集群
+- **「另存为」没有反应** —— 原生保存对话框之前根本不弹出来（插件的回调版 API
+  必须在主线程调用）。改用 `blocking_save_file`
+- **导出的分页方式退化** —— `_pit` 端点不接受请求体、scroll 上下文不允许
+  `track_total_hits: false`，两者失败后会退化成受 `max_result_window` 限制
+  （默认 10000）的 `from` 分页，超过 1 万条就导不出来。现在正常使用 PIT
+
+### 导出安全
+
+- 单次导出**硬上限 1 亿条**，避免拖垮集群和网络。命中数超限时对话框会提示
+- 提示全部数据导出请在服务器端进行（快照恢复 / elasticsearch-dump）
 
 ## 自行构建
 
