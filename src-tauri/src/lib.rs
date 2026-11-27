@@ -347,19 +347,20 @@ async fn export_core(
     let mut scroll_id: Option<String> = None;
     let mut first_page: Option<Value> = None;
 
-    // 1) PIT — ES 7.10+, snapshot view, no max_result_window limit
+    // 1) PIT — ES 7.10+, snapshot view, no max_result_window limit.
+    // The endpoint does not accept a request body.
     let pit_url = format!("{}/{}/_pit?keep_alive=1m", base, idx);
-    if let Ok(v) = send_json(client, "POST", &pit_url, &json!({}), username, password).await
+    if let Ok(v) = send_no_body(client, "POST", &pit_url, username, password).await
         && let Some(pid) = v.get("id").and_then(|x| x.as_str())
     {
         pit_id = Some(pid.to_string());
         strategy = "PIT".to_string();
     }
-    // 2) Scroll — ES <= 7.x, snapshot view, no max_result_window limit
+    // 2) Scroll — ES <= 7.x, snapshot view, no max_result_window limit.
+    // A scroll context does not allow track_total_hits to be disabled.
     if pit_id.is_none() {
         let scroll_url = format!("{}/{}/_search?scroll=2m", base, idx);
-        let probe =
-            json!({ "query": query, "size": chunk, "sort": ["_doc"], "track_total_hits": false });
+        let probe = json!({ "query": query, "size": chunk, "sort": ["_doc"] });
         if let Ok(v) = send_json(client, "POST", &scroll_url, &probe, username, password).await
             && v.get("_scroll_id").and_then(|x| x.as_str()).is_some()
         {
@@ -599,11 +600,38 @@ async fn send_json(
     username: &Option<String>,
     password: &Option<String>,
 ) -> Result<Value, String> {
+    send_request(client, method, url, Some(body), username, password).await
+}
+
+/// A request without a body.
+///
+/// The `_pit` endpoint rejects a request body ("does not support having a
+/// body"), so it cannot go through `send_json`.
+async fn send_no_body(
+    client: &reqwest::Client,
+    method: &str,
+    url: &str,
+    username: &Option<String>,
+    password: &Option<String>,
+) -> Result<Value, String> {
+    send_request(client, method, url, None, username, password).await
+}
+
+async fn send_request(
+    client: &reqwest::Client,
+    method: &str,
+    url: &str,
+    body: Option<&Value>,
+    username: &Option<String>,
+    password: &Option<String>,
+) -> Result<Value, String> {
     let m = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| e.to_string())?;
     let mut req = client
         .request(m, url)
-        .header("Content-Type", "application/json")
-        .body(serde_json::to_string(body).unwrap_or_else(|_| "{}".into()));
+        .header("Content-Type", "application/json");
+    if let Some(b) = body {
+        req = req.body(serde_json::to_string(b).unwrap_or_else(|_| "{}".into()));
+    }
     if let Some(u) = username
         && !u.is_empty()
     {

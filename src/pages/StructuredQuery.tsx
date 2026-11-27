@@ -255,6 +255,35 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
     return out;
   }
 
+  /**
+   * A short human readable summary of the active filter.
+   *
+   * Shown in the export dialog so it is obvious which documents are about to
+   * be written to the file.
+   */
+  const filterSummary = useMemo(() => {
+    if (mode === "dsl") {
+      const t = queryText.trim();
+      return t ? `自定义 DSL（${t.length} 字符）` : "无（全部文档）";
+    }
+    const parts = toClauses().map((c) => {
+      const op = c.must === "must_not" ? "非" : c.must === "should" ? "或" : c.must === "filter" ? "过滤" : "且";
+      const v =
+        c.type === "exists"
+          ? "存在"
+          : c.type === "range" && c.value && typeof c.value === "object"
+            ? Object.entries(c.value)
+                .map(([k, val]) => `${k}=${val}`)
+                .join("~")
+            : Array.isArray(c.value)
+              ? c.value.join("/")
+              : c.value;
+      return `${op} ${c.field} ${c.type} ${v}`;
+    });
+    return parts.length ? parts.join("；") : "无（全部文档）";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, queryText, clauses]);
+
   function makeSearch(): SearchState {
     let queryString = "";
     if (mode === "dsl" && queryText.trim()) {
@@ -344,6 +373,13 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
 
   const hits = result?.hits?.hits ?? [];
   const total = result?.hits?.total?.value ?? result?.hits?.total;
+  /**
+   * ES reports `relation: "gte"` when the total hit count was capped.
+   * With track_total_hits the count is exact, but a cluster that ignores the
+   * flag would still cap it - show the "+" so the number is not read as exact.
+   */
+  const totalRelation: string = result?.hits?.total?.relation ?? "eq";
+  const totalIsCapped = totalRelation === "gte";
   // there is a next page while the current window does not reach the end
   const canNext = total != null && from + hits.length < total;
   const totalPages = total != null ? Math.max(1, Math.ceil(total / size)) : 0;
@@ -422,14 +458,17 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
               索引共 <b>{indexDocs != null ? indexDocs.toLocaleString() : "-"}</b> 条
             </span>
           )}
-          <span className="toolbar-sentence">的文档</span>
           <button
             className="btn btn-xs"
             onClick={() => setShowExport(true)}
             disabled={!index}
-            title={index ? "导出当前查询命中的文档" : "请先选择索引"}
+            title={
+              index
+                ? "导出符合当前筛选条件的文档（Rust 侧流式写盘，内存恒定）"
+                : "请先选择索引"
+            }
           >
-            ⬇ 导出
+            ⬇ 导出命中数据
           </button>
         </div>
       </div>
@@ -610,7 +649,16 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
         {result && (
           <div className="builder-result">
             <div className="result-meta">
-              <span className="result-chip">命中 <b>{total ?? "-"}</b> 条</span>
+              <span
+                className="result-chip result-chip-hit"
+                title={
+                  totalIsCapped
+                    ? "命中数达到 ES 的统计上限，实际数量可能更多"
+                    : "符合当前筛选条件的文档总数"
+                }
+              >
+                命中 <b>{total != null ? total.toLocaleString() : "-"}{totalIsCapped ? "+" : ""}</b> 条
+              </span>
               {indexDocs != null && (
                 <span className="result-chip" title={`索引 ${index} 中的文档总数`}>
                   索引共 <b>{indexDocs.toLocaleString()}</b> 条
@@ -691,6 +739,18 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
                 }}
                 title="输入页码后回车跳转"
               />
+              <button
+                className="btn btn-xs pager-export"
+                onClick={() => setShowExport(true)}
+                disabled={!index || total == null || total === 0}
+                title={
+                  total == null || total === 0
+                    ? "没有可导出的命中数据"
+                    : `导出符合当前筛选条件的全部 ${total.toLocaleString()} 条文档`
+                }
+              >
+                ⬇ 导出命中数据
+              </button>
             </div>
           </div>
         )}
@@ -741,6 +801,7 @@ export default function StructuredQuery({ conn, initialIndex }: { conn: Connecti
           indices={index ? [index] : []}
           body={buildDSL(makeSearch()).body}
           fields={fields}
+          filterSummary={filterSummary}
           total={total ?? 0}
           onClose={() => setShowExport(false)}
         />

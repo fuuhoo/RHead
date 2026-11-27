@@ -27,6 +27,8 @@ interface Props {
   fields: { name: string; type: string }[];
   /** estimated hit count of the current query */
   total: number;
+  /** short human readable summary of the active filter, shown in the dialog */
+  filterSummary?: string;
   onClose: () => void;
 }
 
@@ -46,6 +48,7 @@ export default function ExportDialog({
   body,
   fields,
   total,
+  filterSummary,
   onClose,
 }: Props) {
   const [format, setFormat] = useState<ExportFormat>("ndjson");
@@ -153,7 +156,7 @@ export default function ExportDialog({
   const pct = rowLimit > 0 ? Math.min(100, Math.round((rows / rowLimit) * 100)) : null;
 
   return (
-    <Modal title="导出数据" onClose={onClose} width={520}>
+    <Modal title="导出命中数据" onClose={onClose} width={520}>
       {phase === "running" && (
         <div className="export-panel">
           <div className="export-status">
@@ -215,8 +218,19 @@ export default function ExportDialog({
             </div>
             <div>
               <span className="export-info-label">命中</span>
-              <span className="export-info-value">约 {count(total)} 条</span>
+              <span className="export-info-value">
+                {count(total)} 条
+                <span className="export-info-sub">符合当前筛选条件</span>
+              </span>
             </div>
+            {filterSummary && (
+              <div>
+                <span className="export-info-label">筛选</span>
+                <span className="export-info-value export-info-filter" title={filterSummary}>
+                  {filterSummary}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="export-row">
@@ -324,6 +338,14 @@ export default function ExportDialog({
           </div>
 
           {error && <div className="alert alert-error export-error">{error}</div>}
+
+          {rowLimit > 0 && total > rowLimit && (
+            <div className="alert export-warn">
+              <span>
+                条数上限 {count(rowLimit)} 小于命中数 {count(total)}，导出结果会被截断。
+              </span>
+            </div>
+          )}
 
           {!indices.length && (
             <div className="alert export-warn">

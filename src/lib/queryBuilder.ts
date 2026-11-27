@@ -88,6 +88,10 @@ export function buildDSL(s: SearchState): any {
     query = { bool: { must, must_not: mustNot, should, filter } };
   }
   const body: any = { query, from: s.from, size: s.size, version: true };
+  // ES caps the reported total at 10000 by default (hits.total.relation then
+  // becomes "gte"). The exact number is needed for the hit counter and for
+  // the page count, so ask for it explicitly.
+  body.track_total_hits = true;
   if (s.sort.length) {
     body.sort = s.sort.map((x) => ({ [x.field]: { order: x.order } }));
   }

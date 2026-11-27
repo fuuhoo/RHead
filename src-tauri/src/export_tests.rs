@@ -59,7 +59,9 @@ fn mock_es(total: usize, pit_supported: bool, scroll_supported: bool) -> MockEs 
                 let _ = reader.read_exact(&mut body);
             }
             let body = String::from_utf8_lossy(&body).to_string();
-            reqs.lock().unwrap().push(format!("{} {}", method, target));
+            reqs.lock()
+                .unwrap()
+                .push(format!("{} {} | {}", method, target, body));
 
             let response = handle(
                 &method,
@@ -100,6 +102,13 @@ fn handle(
     if path.ends_with("/_pit") {
         if !pit_supported {
             return json_response(400, r#"{"error":{"reason":"no PIT here"}}"#);
+        }
+        // real ES rejects a request body on this endpoint
+        if !body.trim().is_empty() {
+            return json_response(
+                400,
+                r#"{"error":{"reason":"request does not support having a body"}}"#,
+            );
         }
         return json_response(200, r#"{"id":"pit-1"}"#);
     }
@@ -151,6 +160,13 @@ fn handle(
         if is_scroll_query {
             if !scroll_supported {
                 return json_response(400, r#"{"error":{"reason":"no scroll here"}}"#);
+            }
+            // real ES refuses track_total_hits:false in a scroll context
+            if v.get("track_total_hits") == Some(&json!(false)) {
+                return json_response(
+                    400,
+                    r#"{"error":{"reason":"disabling [track_total_hits] is not allowed in a scroll context"}}"#,
+                );
             }
             resp["_scroll_id"] = json!(format!("scroll:{}:{}", end, size));
         }
@@ -217,6 +233,34 @@ fn run(
     chunk: usize,
     cancel: Option<Arc<AtomicBool>>,
 ) -> ExportSummary {
+    run_with_body(
+        es,
+        format,
+        fields,
+        include_meta,
+        csv_columns,
+        out,
+        max_rows,
+        chunk,
+        cancel,
+        r#"{"query":{"match_all":{}},"from":0,"size":50}"#,
+    )
+}
+
+/// Same as `run` but with a caller supplied request body.
+#[allow(clippy::too_many_arguments)]
+fn run_with_body(
+    es: &MockEs,
+    format: &str,
+    fields: Option<Vec<String>>,
+    include_meta: bool,
+    csv_columns: Option<Vec<String>>,
+    out: &str,
+    max_rows: Option<usize>,
+    chunk: usize,
+    cancel: Option<Arc<AtomicBool>>,
+    body: &str,
+) -> ExportSummary {
     let base = format!("http://127.0.0.1:{}", es.port);
     let flag = cancel.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let noop = |_: usize, _: u64, _: &str| {};
@@ -230,7 +274,7 @@ fn run(
             &None,
             &None,
             "test-index",
-            r#"{"query":{"match_all":{}},"from":0,"size":50}"#,
+            body,
             format,
             fields,
             include_meta,
@@ -449,5 +493,67 @@ fn falls_back_to_from_paging_without_pit_or_scroll() {
         "must fall back when neither PIT nor scroll exist"
     );
     assert_eq!(s.rows, 300);
+    let _ = std::fs::remove_file(&out);
+}
+
+/// The `from` paging is limited by index.max_result_window, so a large export
+/// has to use PIT or Scroll. Both failed on real clusters because of small
+/// request details, which the mock now enforces.
+#[test]
+fn uses_pit_or_scroll_rather_than_from_paging() {
+    // PIT available
+    let es = mock_es(300, true, true);
+    let out = tmp_path("strategy-pit");
+    let s = run(&es, "ndjson", None, true, None, &out, None, 100, None);
+    assert_eq!(s.strategy, "PIT", "a modern cluster must be paged with PIT");
+    assert_eq!(s.rows, 300);
+    let _ = std::fs::remove_file(&out);
+
+    // PIT missing, Scroll available
+    let es = mock_es(300, false, true);
+    let out = tmp_path("strategy-scroll");
+    let s = run(&es, "ndjson", None, true, None, &out, None, 100, None);
+    assert_eq!(
+        s.strategy, "Scroll",
+        "without PIT the export must use Scroll, not the capped from paging"
+    );
+    assert_eq!(s.rows, 300);
+    let _ = std::fs::remove_file(&out);
+}
+
+/// The export must send the query it was given, so the exported file holds
+/// exactly the documents that match the filter.
+#[test]
+fn exports_only_the_documents_matching_the_query() {
+    let es = mock_es(50, true, true);
+    let out = tmp_path("filtered");
+    // a query that only some of the documents can match
+    let body = json!({
+        "query": { "range": { "seq": { "gte": 10 } } },
+        "from": 0,
+        "size": 10
+    });
+    let s = run_with_body(
+        &es,
+        "ndjson",
+        None,
+        true,
+        None,
+        &out,
+        None,
+        10,
+        None,
+        &body.to_string(),
+    );
+    assert_eq!(s.rows, 50);
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert_eq!(text.lines().count(), 50);
+    // the range filter reached the server - the mock records the requests
+    let reqs = es.requests.lock().unwrap().clone();
+    assert!(
+        reqs.iter().any(|r| r.contains("range")),
+        "the filter must be part of the request sent to ES: {:?}",
+        reqs
+    );
     let _ = std::fs::remove_file(&out);
 }
