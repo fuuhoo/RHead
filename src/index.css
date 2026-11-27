@@ -917,6 +917,13 @@ mark { background: #fde68a; padding: 0 1px; border-radius: 2px; }
 .spinner-dark { border-color: rgba(29, 78, 216, 0.25); border-top-color: #1d4ed8; }
 .alert-ok { background: #f0fdf4; border-color: #bbf7d0; color: #166534; }
 
+/* ---------- snapshot management ---------- */
+.snap-error { white-space: pre-line; }
+.snap-uuid {
+  font-family: var(--mono); font-size: 11px; font-weight: 400;
+  word-break: break-all; color: var(--muted);
+}
+
 /* ---------- security / access management ---------- */
 .sec-tabs { margin-bottom: 10px; align-self: flex-start; }
 .sec-tabs button { display: inline-flex; align-items: center; gap: 6px; }

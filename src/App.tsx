@@ -17,14 +17,16 @@ import Overview from "./pages/Overview";
 import StructuredQuery from "./pages/StructuredQuery";
 import AnyRequest from "./pages/AnyRequest";
 import Security from "./pages/Security";
+import Snapshots from "./pages/Snapshots";
 import Modal from "./components/Modal";
 
-type Page = "overview" | "structured" | "any" | "security";
+type Page = "overview" | "structured" | "any" | "security" | "snapshots";
 
 const NAV: { id: Page; label: string; icon: string; badge?: string }[] = [
   { id: "overview", label: "概览", icon: "◈" },
   { id: "structured", label: "结构化查询", icon: "⌗", badge: "+" },
   { id: "any", label: "复合查询", icon: "⚡", badge: "+" },
+  { id: "snapshots", label: "快照", icon: "📸" },
   { id: "security", label: "权限管理", icon: "🔑" },
 ];
 
@@ -382,6 +384,7 @@ export default function App() {
                 <StructuredQuery key={structuredIndex ?? "all"} conn={conn} initialIndex={structuredIndex} />
               )}
               {page === "any" && <AnyRequest conn={conn} />}
+              {page === "snapshots" && <Snapshots conn={conn} />}
               {page === "security" && <Security conn={conn} />}
             </>
           )}
