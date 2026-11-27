@@ -646,6 +646,62 @@ h4 { margin: 0 0 7px; font-size: 12px; color: var(--muted); text-transform: uppe
 .viz-details[open] > summary { border-bottom: 1px solid var(--border); }
 .viz-details > .qv { border: none; border-radius: 0; }
 
+/* ---------- smart hints for the composite query ---------- */
+.lint-panel {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); overflow: hidden;
+}
+.lint-ok {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 11px; font-size: 12px; color: #166534; background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.lint-ok-glyph { font-weight: 700; }
+.lint-head { display: flex; }
+.lint-toggle {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 6px 11px; border: none; background: transparent;
+  cursor: pointer; text-align: left; font-size: 12.5px; color: var(--text);
+}
+.lint-toggle:hover { background: var(--surface-2); }
+.lint-caret { color: var(--muted); font-size: 11px; width: 10px; }
+.lint-badge {
+  font-size: 10.5px; font-weight: 700; line-height: 16px; min-width: 18px;
+  text-align: center; border-radius: 999px; padding: 0 5px;
+}
+.lint-badge-error { background: #fee2e2; color: #b91c1c; }
+.lint-badge-warn { background: #fef3c7; color: #b45309; }
+.lint-badge-info { background: #e0f2fe; color: #0369a1; }
+.lint-title { font-weight: 600; }
+.lint-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+.lint-item {
+  display: flex; gap: 9px; padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.lint-item:last-child { border-bottom: none; }
+.lint-glyph { font-size: 13px; line-height: 1.4; flex-shrink: 0; }
+.lint-body { min-width: 0; flex: 1; }
+.lint-item-title {
+  font-size: 12.5px; font-weight: 600; line-height: 1.5;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px;
+}
+.lint-level {
+  font-size: 10px; font-weight: 700; padding: 0 5px; line-height: 15px;
+  border-radius: 4px; background: var(--surface-2); color: var(--muted);
+}
+.lint-at {
+  font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+  background: var(--surface-2); padding: 0 4px; border-radius: 4px;
+}
+.lint-detail {
+  font-size: 12px; color: var(--muted); line-height: 1.65; margin-top: 3px;
+  white-space: pre-line;
+}
+.lint-fix { margin-top: 6px; }
+.lint-item-error { background: #fef2f2; }
+.lint-item-warn { background: #fffbeb; }
+.lint-item-info { background: #f0f9ff; }
+
 /* result meta chips */
 .result-meta { display: flex; gap: 7px; flex-wrap: wrap; }
 .result-chip {

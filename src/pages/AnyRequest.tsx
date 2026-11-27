@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Connection, esRequest, friendlyError } from "../lib/es";
+import { Connection, esRequest, esGet, friendlyError } from "../lib/es";
 import { clampTimeout, loadTimeout, saveTimeout } from "../lib/timeout";
 import { columnStoreKey } from "../lib/columns";
+import {
+  DEFAULT_MAX_RESULT_WINDOW,
+  FieldMap,
+  LintHint,
+  buildFieldMap,
+  indicesFromPath,
+  lintRequest,
+} from "../lib/lint";
 import QueryEditor from "../components/QueryEditor";
 import QueryVisualizer from "../components/QueryVisualizer";
 import ResultsTable from "../components/ResultsTable";
@@ -77,6 +85,86 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
   }, [timeoutSec]);
 
   const [cronActive, setCronActive] = useState(false);
+
+  /**
+   * The mapping of the index the request targets - the smart hints compare
+   * the fields in the query against it.
+   */
+  const [fields, setFields] = useState<FieldMap>({});
+  const [indexExists, setIndexExists] = useState(true);
+  const [maxResultWindow, setMaxResultWindow] = useState(DEFAULT_MAX_RESULT_WINDOW);
+  const [mappingKnown, setMappingKnown] = useState(false);
+  const mappingKey = useRef("");
+
+  const targetIndices = useMemo(() => indicesFromPath(path), [path]);
+  const targetKey = targetIndices.join(",");
+
+  // fetch the mapping (and the index settings) whenever the target changes
+  useEffect(() => {
+    const isSearch = /_(search|count|msearch|field_caps)$/.test(path.split("?")[0]);
+    if (!targetKey || !isSearch) {
+      mappingKey.current = "";
+      setFields({});
+      setMappingKnown(false);
+      return;
+    }
+    if (mappingKey.current === targetKey) return;
+    mappingKey.current = targetKey;
+    let alive = true;
+    console.log("[lint] fetching mapping for", targetKey, "isSearch", isSearch);
+
+    (async () => {
+      const idx = encodeURIComponent(targetKey);
+      const [mapRes, setRes, headRes] = await Promise.all([
+        esGet(conn, `${idx}/_mapping`),
+        esGet(conn, `${idx}/_settings?flat_settings=true&filter_path=*.index.max_result_window`),
+        esGet(conn, idx),
+      ]);
+      if (!alive) return;
+
+      // the mapping call answers 404 when the index does not exist
+      const mapOk = mapRes.status < 400 && !!mapRes.json;
+      setFields(mapOk ? buildFieldMap(mapRes.json) : {});
+      setMappingKnown(!!mapOk);
+      setIndexExists(headRes.status < 400);
+
+      const settings = setRes.json ?? {};
+      let limit = DEFAULT_MAX_RESULT_WINDOW;
+      for (const def of Object.values(settings as any[])) {
+        const v = def?.["index.max_result_window"];
+        if (v != null) {
+          limit = Number(v);
+          break;
+        }
+      }
+      setMaxResultWindow(Number.isFinite(limit) ? limit : DEFAULT_MAX_RESULT_WINDOW);
+    })().catch(() => {
+      if (alive) setMappingKnown(false);
+    });
+
+    return () => {
+      alive = false;
+    };
+  }, [conn, path, targetKey]);
+
+  // the hints are recomputed on every keystroke
+  const hints = useMemo(
+    () =>
+      lintRequest(body, path, {
+        fields,
+        indices: targetIndices,
+        indexExists,
+        maxResultWindow,
+        mappingKnown,
+      }),
+    [body, path, fields, targetIndices, indexExists, maxResultWindow, mappingKnown]
+  );
+
+  const hintCounts = useMemo(() => {
+    const c = { error: 0, warn: 0, info: 0 };
+    for (const h of hints) c[h.level] += 1;
+    return c;
+  }, [hints]);
 
   function validate(): boolean {
     try {
@@ -274,6 +362,21 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
           label="请求体 JSON（Ctrl+Enter 提交）"
           onSubmit={() => send()}
         />
+        <LintPanel
+          hints={hints}
+          errorCount={hintCounts.error}
+          warnCount={hintCounts.warn}
+          infoCount={hintCounts.info}
+          onApply={(patch) => {
+            try {
+              const next = JSON.stringify(patch, null, 2);
+              setBody(next);
+              if (pretty) setBody(next);
+            } catch (e: any) {
+              setError(e.message);
+            }
+          }}
+        />
         {vizBody && (
           <details className="viz-details" open>
             <summary>查询结构可视化</summary>
@@ -309,6 +412,102 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
           </div>
         )}
       </main>
+    </div>
+  );
+}
+
+const LEVEL_LABEL: Record<string, string> = {
+  error: "错误",
+  warn: "警告",
+  info: "提示",
+};
+
+const LEVEL_GLYPH: Record<string, string> = {
+  error: "⛔",
+  warn: "⚠",
+  info: "💡",
+};
+
+/**
+ * The smart hints for the request being written.
+ *
+ * They show up while typing, so the panel stays collapsed when there is
+ * nothing to say and opens itself when something is wrong.
+ */
+function LintPanel({
+  hints,
+  errorCount,
+  warnCount,
+  infoCount,
+  onApply,
+}: {
+  hints: LintHint[];
+  errorCount: number;
+  warnCount: number;
+  infoCount: number;
+  onApply: (body: any) => void;
+}) {
+  const total = hints.length;
+  const [open, setOpen] = useState(false);
+
+  // open by itself when something is wrong, but never fight the user
+  useEffect(() => {
+    if (errorCount > 0) setOpen(true);
+    else if (warnCount > 0) setOpen(true);
+    else if (total === 0) setOpen(false);
+  }, [errorCount, warnCount, total]);
+
+  if (!total) {
+    return (
+      <div className="lint-panel lint-ok">
+        <span className="lint-ok-glyph">✓</span>
+        <span>没有发现问题</span>
+      </div>
+    );
+  }
+
+  const level = errorCount ? "error" : warnCount ? "warn" : "info";
+
+  return (
+    <div className={`lint-panel lint-${level}`}>
+      <div className="lint-head">
+        <button
+          className="lint-toggle"
+          onClick={() => setOpen((o) => !o)}
+          title={open ? "收起" : "展开"}
+        >
+          <span className="lint-caret">{open ? "▾" : "▸"}</span>
+          <span className="lint-badge lint-badge-error">{errorCount}</span>
+          <span className="lint-badge lint-badge-warn">{warnCount}</span>
+          <span className="lint-badge lint-badge-info">{infoCount}</span>
+          <span className="lint-title">
+            {errorCount ? "有错误" : warnCount ? "有警告" : "建议"}
+          </span>
+        </button>
+      </div>
+
+      {open && (
+        <ul className="lint-list">
+          {hints.map((h, i) => (
+            <li key={i} className={`lint-item lint-item-${h.level}`}>
+              <span className="lint-glyph">{LEVEL_GLYPH[h.level]}</span>
+              <div className="lint-body">
+                <div className="lint-item-title">
+                  {h.title}
+                  <span className="lint-level">{LEVEL_LABEL[h.level]}</span>
+                  {h.at && <code className="lint-at">{h.at}</code>}
+                </div>
+                {h.detail && <div className="lint-detail">{h.detail}</div>}
+                {h.fix && (
+                  <button className="btn btn-xs lint-fix" onClick={() => onApply(h.fix!.body)}>
+                    {h.fix.label}
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
