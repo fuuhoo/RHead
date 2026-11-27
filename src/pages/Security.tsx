@@ -8,6 +8,7 @@ import {
   INDEX_PRIVILEGE_GROUPS,
   MAPPING_RULE_MODES,
   PrivilegeGroup,
+  SECURITY_DISABLED_MESSAGE,
   deleteRole,
   deleteRoleMapping,
   deleteUser,
@@ -19,7 +20,9 @@ import {
   fetchUsers,
   flattenPrivileges,
   indexNamesFor,
+  isSecurityDisabledError,
   parseIndexPatterns,
+  probeSecurityEnabled,
   putRole,
   putRoleMapping,
   putUser,
@@ -65,11 +68,28 @@ export default function Security({ conn }: { conn: Connection }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
+  /**
+   * The cluster runs without xpack.security - there are no users, roles or
+   * mappings to manage, so the page explains that instead of showing an
+   * error.
+   */
+  const [securityOff, setSecurityOff] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
+      // ask first whether the security API can work at all - a cluster with
+      // xpack.security disabled answers every call with a 500
+      const enabled = await probeSecurityEnabled(conn);
+      if (enabled === false) {
+        setSecurityOff(true);
+        setUsers({});
+        setRoles({});
+        setMappings({});
+        return;
+      }
+      setSecurityOff(false);
       const [u, r, m] = await Promise.all([
         fetchUsers(conn),
         fetchRoles(conn),
@@ -79,7 +99,14 @@ export default function Security({ conn }: { conn: Connection }) {
       setRoles(r);
       setMappings(m);
     } catch (e: any) {
-      setError(friendlyError(e, conn));
+      // the cluster may have been switched off while the page was open
+      const text = friendlyError(e, conn);
+      if (isSecurityDisabledError(text)) {
+        setSecurityOff(true);
+        setError("");
+      } else {
+        setError(text);
+      }
     } finally {
       setLoading(false);
     }
@@ -91,6 +118,43 @@ export default function Security({ conn }: { conn: Connection }) {
       .then((a) => setWhoami({ username: a.username, roles: a.roles ?? [] }))
       .catch(() => setWhoami(null));
   }, [conn, reload]);
+
+  if (securityOff) {
+    return (
+      <div className="page">
+        <div className="page-toolbar">
+          <h2>权限管理</h2>
+        </div>
+        <div className="sec-disabled">
+          <div className="sec-disabled-glyph">🔒</div>
+          <div className="sec-disabled-title">该集群未启用安全功能</div>
+          <div className="sec-disabled-text">{SECURITY_DISABLED_MESSAGE}</div>
+          <div className="sec-disabled-hint">
+            <div>要使用用户 / 角色 / 角色映射功能，需要在服务端：</div>
+            <ol>
+              <li>
+                在 <code>elasticsearch.yml</code> 中设置{" "}
+                <code>xpack.security.enabled: true</code>
+              </li>
+              <li>
+                重启所有节点（集群内每个节点都要改）
+              </li>
+              <li>
+                用 <code>elastic</code> 或带 <code>superuser</code> 的账号重新连接
+              </li>
+            </ol>
+            <div className="sec-disabled-note">
+              提示：<code>basic</code> license 支持安全功能，但必须显式开启；
+              未开启时 ES 会拒绝所有 <code>/_security</code> 请求。
+            </div>
+          </div>
+          <button className="btn" onClick={reload} disabled={loading}>
+            {loading ? "检测中…" : "重新检测"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page">

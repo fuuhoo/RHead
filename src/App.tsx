@@ -12,6 +12,7 @@ import {
 } from "./lib/es";
 import { useCluster } from "./lib/useCluster";
 import { healthColor, healthFraction } from "./lib/format";
+import { probeSecurityEnabled } from "./lib/security";
 import Overview from "./pages/Overview";
 import StructuredQuery from "./pages/StructuredQuery";
 import AnyRequest from "./pages/AnyRequest";
@@ -50,6 +51,26 @@ export default function App() {
   const [fPass, setFPass] = useState("");
   const booted = useRef(false);
   const { snap, loading, error: snapError, refresh } = useCluster(conn);
+  /**
+   * Whether the cluster runs with xpack.security enabled. `null` means it is
+   * not known yet (or the cluster cannot be asked) - the permission page then
+   * finds out on its own.
+   */
+  const [securityEnabled, setSecurityEnabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!conn) {
+      setSecurityEnabled(null);
+      return;
+    }
+    let alive = true;
+    probeSecurityEnabled(conn).then((v) => {
+      if (alive) setSecurityEnabled(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [conn]);
 
   // auto-connect to last session's connection on startup (guarded for StrictMode)
   useEffect(() => {
@@ -305,10 +326,20 @@ export default function App() {
               className={`nav-tab ${page === n.id ? "nav-tab-on" : ""}`}
               onClick={() => setPage(n.id)}
               aria-current={page === n.id ? "page" : undefined}
+              title={
+                n.id === "security" && securityEnabled === false
+                  ? "该集群未启用安全功能，用户/角色不可用"
+                  : undefined
+              }
             >
               <span className="nav-tab-icon">{n.icon}</span>
               <span>{n.label}</span>
               {n.badge && <span className="nav-tab-badge">{n.badge}</span>}
+              {n.id === "security" && securityEnabled === false && (
+                <span className="nav-tab-warn" aria-label="未启用安全功能">
+                  !
+                </span>
+              )}
             </button>
           ))}
         </nav>

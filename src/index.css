@@ -183,6 +183,11 @@ button, input, select, textarea { font: inherit; }
 .nav-tab-on:hover { background: var(--accent); color: #fff; }
 .nav-tab-icon { font-size: 12px; opacity: 0.85; }
 .nav-tab-badge { font-size: 10.5px; opacity: 0.7; }
+.nav-tab-warn {
+  font-size: 10px; font-weight: 800; line-height: 13px; width: 13px; height: 13px;
+  border-radius: 50%; background: #f59e0b; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+}
 
 /* narrow windows: drop the least important bits first */
 @media (max-width: 1400px) { .topbar { background: #eefbeef0 !important; } }
@@ -868,10 +873,25 @@ h4 { margin: 0 0 7px; font-size: 12px; color: var(--muted); text-transform: uppe
   backdrop-filter: blur(2px); display: grid; place-items: center; z-index: 50;
   animation: fadeIn 0.15s ease;
 }
-.modal { background: var(--surface); border-radius: 12px; padding: 14px 16px; width: 370px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow-lg); animation: popIn 0.18s ease; }
-.modal .drawer-head { margin: -14px -16px 0; padding: 10px 16px; border-radius: 12px 12px 0 0; }
+.modal { background: var(--surface); border-radius: 12px; padding: 14px 16px; width: 370px; display: flex; flex-direction: column; gap: 10px; box-shadow: var(--shadow-lg); animation: popIn 0.18s ease; max-height: calc(100vh - 48px); }
+.modal .drawer-head { margin: -14px -16px 0; padding: 10px 16px; border-radius: 12px 12px 0 0; flex-shrink: 0; }
 .modal label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); }
 .modal-actions { display: flex; gap: 7px; justify-content: flex-end; }
+/* the scrolling area of a modal - keeps long forms reachable */
+.modal-body {
+  overflow-y: auto; overflow-x: hidden;
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column; gap: 10px;
+}
+/* flex items would otherwise be squashed below their natural height */
+.modal-body > * { flex-shrink: 0; }
+/* the action row stays visible while the form scrolls */
+.modal-body > .modal-actions {
+  position: sticky; bottom: 0; z-index: 1;
+  background: var(--surface);
+  box-shadow: 0 -8px 10px -8px rgba(15, 23, 42, 0.14);
+  padding: 8px 0 2px; margin-bottom: -2px;
+}
 @keyframes fadeIn { from { opacity: 0; } }
 @keyframes slideIn { from { transform: translateX(30px); opacity: 0.5; } }
 @keyframes popIn { from { transform: scale(0.96); opacity: 0; } }
@@ -905,6 +925,31 @@ mark { background: #fde68a; padding: 0 1px; border-radius: 2px; }
   border-radius: 999px; padding: 0 6px; line-height: 15px; min-width: 18px; text-align: center;
 }
 .sec-tabs button.on .sec-tab-count { background: rgba(255, 255, 255, 0.25); color: #fff; }
+
+/* the cluster runs without xpack.security - explain instead of erroring */
+.sec-disabled {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 26px 28px; box-shadow: var(--shadow-sm);
+  max-width: 620px; text-align: center;
+}
+.sec-disabled-glyph { font-size: 34px; line-height: 1; margin-bottom: 10px; }
+.sec-disabled-title { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+.sec-disabled-text { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.sec-disabled-hint {
+  margin: 16px 0 18px; padding: 12px 14px; text-align: left;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  font-size: 12.5px; line-height: 1.75; color: var(--text);
+}
+.sec-disabled-hint ol { margin: 6px 0 0; padding-left: 20px; }
+.sec-disabled-hint code {
+  font-family: var(--mono); font-size: 11.5px;
+  background: #eef2f7; padding: 1px 4px; border-radius: 4px;
+}
+.sec-disabled-note {
+  margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--border);
+  font-size: 11.5px; color: var(--muted); line-height: 1.6;
+}
+.sec-disabled-note code { background: #eef2f7; padding: 1px 4px; border-radius: 4px; }
 
 /* inline tags (roles, privileges, states) */
 .tag {

@@ -143,6 +143,43 @@ export function togglePrivilege(selected: string[], priv: string): string[] {
 export const MANAGE_SECURITY_NOTE =
   "需要 manage_security（或 superuser）权限才能查看/修改用户与角色。";
 
+/**
+ * The cluster runs with `xpack.security.enabled: false`.
+ *
+ * ES then refuses every /_security call with a 500 and this message. It is
+ * a configuration state, not a failure of the app, so the UI shows an
+ * explanation instead of an error.
+ */
+export const SECURITY_DISABLED_MESSAGE =
+  "该集群未启用 X-Pack 安全功能（xpack.security.enabled = false），" +
+  "因此没有用户、角色和角色映射可供管理。";
+
+/**
+ * Detect the "security is switched off" error in an ES response.
+ *
+ * The message is what ES produces for a basic license without security
+ * enabled; there is no dedicated status code for it.
+ */
+export function isSecurityDisabledError(message: string): boolean {
+  return /Security must be explicitly enabled|xpack\.security\.enabled/i.test(message);
+}
+
+/**
+ * Ask the cluster whether X-Pack security is enabled.
+ *
+ * Returns null when the answer is unknown (the endpoint is not available or
+ * not readable) - the caller then simply tries the security API as before.
+ */
+export async function probeSecurityEnabled(conn: Connection): Promise<boolean | null> {
+  try {
+    const r = await esGet(conn, "_xpack/usage?filter_path=security.enabled");
+    const enabled = r.json?.security?.enabled;
+    return typeof enabled === "boolean" ? enabled : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // API wrappers
 // ---------------------------------------------------------------------------
@@ -163,7 +200,13 @@ function ensureOk(r: EsResult, what: string): void {
     );
   }
   if (r.status >= 400) {
-    throw new EsError("es_error", `${what}失败：${errorText(r)}`);
+    const detail = errorText(r);
+    // a cluster without xpack.security answers 500 with this message - it is
+    // a configuration state and must not be shown as a plain error
+    if (isSecurityDisabledError(detail)) {
+      throw new EsError("es_error", SECURITY_DISABLED_MESSAGE, r.status);
+    }
+    throw new EsError("es_error", `${what}失败：${detail}`);
   }
 }
 

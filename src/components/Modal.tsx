@@ -29,7 +29,10 @@ export default function Modal({
             ✕
           </button>
         </div>
-        {children}
+        {/* the body scrolls - a long form (e.g. the role editor) would
+            otherwise run past the bottom of the window with no way to reach
+            the rest of it */}
+        <div className="modal-body">{children}</div>
       </div>
     </div>
   );
