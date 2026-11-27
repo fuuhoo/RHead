@@ -511,14 +511,18 @@ h4 { margin: 0 0 7px; font-size: 12px; color: var(--muted); text-transform: uppe
 /* ---------- any request ---------- */
 .any-layout { display: flex; gap: 12px; height: 100%; min-height: 0; }
 .any-side { width: 276px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; min-height: 0; }
-.any-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
+.any-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; min-height: 0; overflow-y: auto; }
 /* the output area takes the remaining height so the result table can
    scroll on its own */
-.any-out { display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+.any-out { display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto; min-height: 200px; }
 /* the request editor may take a lot of room - keep the result table
    usable by giving it a reasonable share of the space */
 .any-out .table-block-fill { flex: 2 1 0; min-height: 0; }
-.any-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+/* the JSON response fills the space that is left and scrolls inside.
+   Without this the panel is squeezed by the flex layout and its
+   `overflow: hidden` clips the content instead of scrolling it. */
+.any-out .json-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.any-out .json-pre { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
 .filter-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; box-shadow: var(--shadow-sm); }
 .filter-section.filter-grow { flex: 1; min-height: 110px; display: flex; flex-direction: column; }
 .filter-grow .field-empty { flex-shrink: 0; }
