@@ -6,12 +6,38 @@ Elasticsearch 桌面客户端，elasticsearch-head 的 Tauri 2 + React 重写版
 
 | 平台 | 文件 |
 |---|---|
-| Windows x64 | `RHead_0.4.0_x64_en-US.msi` 或 `RHead_0.4.0_x64-setup.exe` |
-| macOS Intel | `RHead_0.4.0_x64.dmg` |
-| macOS Apple Silicon | `RHead_0.4.0_aarch64.dmg` |
-| Linux x64 | `RHead_0.4.0_amd64.deb` / `RHead-0.4.0-1.x86_64.rpm` / `RHead_0.4.0_amd64.AppImage` |
+| Windows x64 | `RHead_0.4.1_x64_en-US.msi` 或 `RHead_0.4.1_x64-setup.exe` |
+| macOS Intel | `RHead_0.4.1_x64.dmg` |
+| macOS Apple Silicon | `RHead_0.4.1_aarch64.dmg` |
+| Linux x64 | `RHead_0.4.1_amd64.deb` / `RHead-0.4.1-1.x86_64.rpm` / `RHead_0.4.1_amd64.AppImage` |
 
 ## 本次更新
+
+### 复合查询：补全改成认索引，补上真实数据值
+
+之前复合查询的请求体编辑器没有传 mapping，补全只有通用的 key 建议，不知道
+目标索引有哪些字段。现在：
+
+**字段补全** —— 把目标索引的 mapping 传给编辑器，字段名建议带上真实类型。
+`sort` 字段位置会补出 `_score`、`_doc` 和全部可排序字段。
+
+```
+输入 dev  →  deviceId | keyword
+```
+
+**真实值补全** —— 光标停在某个字段的值上时，用 terms 聚合去查这个字段在索引
+里实际出现过哪些值，作为候选补出来（按出现次数排序）：
+
+```
+{"query":{"term":{"deviceId":"2▌"}}}
+     ↓
+ = 2125406348337352711   索引里的实际值
+ = 2125406348765171719   索引里的实际值
+```
+
+- `text` 字段没有 doc values，自动改用它的 `.keyword` 子字段去聚合
+- 每个字段只查一次，结果会缓存
+- 值到达后下拉框自动弹出，不用再敲一下键
 
 ### 新增：复合查询的智能提醒
 
