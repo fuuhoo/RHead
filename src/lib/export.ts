@@ -25,7 +25,20 @@ export interface ExportSummary {
   strategy: string;
   /** false when the export stopped early (canceled or row limit hit) */
   complete: boolean;
+  /** the row limit that was applied, if any */
+  limit?: number | null;
+  /** true when the hard cap stopped the export */
+  hitHardCap?: boolean;
 }
+
+/**
+ * The hard upper bound for a single export.
+ *
+ * Pulling a hundred million documents over the network would hammer both the
+ * cluster and the link for hours. Larger exports belong on the server side
+ * (snapshot + restore, or elasticsearch-dump).
+ */
+export const MAX_EXPORT_ROWS = 100_000_000;
 
 export interface ExportOptions {
   id: string;

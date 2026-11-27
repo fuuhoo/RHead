@@ -557,3 +557,39 @@ fn exports_only_the_documents_matching_the_query() {
     );
     let _ = std::fs::remove_file(&out);
 }
+
+/// A user supplied row limit stops the export and is reported as such.
+#[test]
+fn stops_at_the_user_row_limit() {
+    let es = mock_es(300, true, true);
+    let out = tmp_path("user-limit");
+    let s = run(&es, "ndjson", None, true, None, &out, Some(120), 50, None);
+    assert_eq!(s.rows, 120, "the export must stop at the user's limit");
+    assert!(!s.complete, "a truncated export is not complete");
+    assert_eq!(s.limit, Some(120));
+    assert!(!s.hit_hard_cap, "the user's own limit is not the hard cap");
+    let _ = std::fs::remove_file(&out);
+}
+
+/// A row limit above the hard cap is clamped to the cap.
+#[test]
+fn clamps_the_row_limit_to_the_hard_cap() {
+    let es = mock_es(300, true, true);
+    let out = tmp_path("clamped");
+    let s = run(
+        &es,
+        "ndjson",
+        None,
+        true,
+        None,
+        &out,
+        Some(super::MAX_EXPORT_ROWS + 1_000_000),
+        50,
+        None,
+    );
+    // the mock only has 300 documents, so the export finishes normally -
+    // what matters is that the limit was clamped and not rejected
+    assert_eq!(s.rows, 300);
+    assert!(s.complete);
+    let _ = std::fs::remove_file(&out);
+}

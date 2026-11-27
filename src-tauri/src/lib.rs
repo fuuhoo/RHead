@@ -119,6 +119,13 @@ struct ExportState {
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
+/// Hard upper bound for a single export.
+///
+/// Pulling a hundred million documents over the network would hammer both the
+/// cluster and the link for hours. When more than this is needed the export
+/// belongs on the server side (a snapshot + restore, or elasticsearch-dump).
+const MAX_EXPORT_ROWS: usize = 100_000_000;
+
 #[derive(Serialize)]
 struct ExportSummary {
     path: String,
@@ -128,6 +135,10 @@ struct ExportSummary {
     strategy: String,
     /// false when the export was cut short (canceled or row limit reached)
     complete: bool,
+    /// the row limit that was applied, if any
+    limit: Option<usize>,
+    /// true when the hard cap stopped the export
+    hit_hard_cap: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -171,21 +182,25 @@ async fn export_pick_path(
     default_name: String,
     ext: String,
 ) -> Result<Option<String>, String> {
-    let (tx, mut rx) = tauri::async_runtime::channel::<Option<tauri_plugin_dialog::FilePath>>(1);
-    // the plugin dispatches the dialog to the UI thread itself
-    app.dialog()
-        .file()
-        .set_file_name(default_name)
-        .add_filter(ext.to_uppercase(), &[ext.as_str()])
-        .save_file(move |p| {
-            // the send future is fire-and-forget: the receiver waits on the
-            // other side of the channel, so dropping the result is fine
-            drop(tx.send(p));
-        });
-    Ok(rx
-        .recv()
-        .await
-        .flatten()
+    // `blocking_save_file` waits for the user, so it runs on a blocking
+    // thread - the async worker stays free for the other commands.
+    //
+    // The non blocking `save_file` variant must not be used here: it is meant
+    // for the main thread and silently does nothing when called from an async
+    // command (no dialog ever appears).
+    let filter_name = ext.to_uppercase();
+    let filter_ext = ext.clone();
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .set_file_name(default_name)
+            .add_filter(filter_name, &[filter_ext.as_str()])
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| format!("打开保存对话框失败：{}", e))?;
+
+    Ok(picked
         .and_then(|p| p.into_path().ok())
         .map(|p| p.to_string_lossy().to_string()))
 }
@@ -327,6 +342,14 @@ async fn export_core(
     } else {
         indices.trim().to_string()
     };
+
+    // The row limit can never exceed the hard cap. A limit of zero means
+    // "no limit" - the cap takes over then.
+    let limit: usize = match max_rows {
+        Some(0) | None => MAX_EXPORT_ROWS,
+        Some(n) => n.min(MAX_EXPORT_ROWS),
+    };
+    let user_limit = max_rows.filter(|n| *n > 0);
 
     // Reuse the query built by the UI, but drop the parts that only make
     // sense for an interactive page (paging, sorting, aggregations).
@@ -503,9 +526,7 @@ async fn export_core(
                     complete = false;
                     break;
                 }
-                if let Some(limit) = max_rows
-                    && rows >= limit
-                {
+                if rows >= limit {
                     complete = false;
                     break;
                 }
@@ -588,6 +609,10 @@ async fn export_core(
         bytes: writer.count,
         strategy,
         complete,
+        limit: user_limit,
+        // the export was cut short because the hard cap was reached, not
+        // because of the user's own row limit or a cancel
+        hit_hard_cap: !complete && user_limit.is_none() && rows >= MAX_EXPORT_ROWS,
     })
 }
 

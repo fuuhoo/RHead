@@ -7,6 +7,7 @@ import {
   ExportFormat,
   ExportProgress,
   ExportSummary,
+  MAX_EXPORT_ROWS,
   onExportProgress,
   pickExportPath,
   runExport,
@@ -186,11 +187,20 @@ export default function ExportDialog({
             <span className="export-done-mark">✓</span>
             <div>
               <div className="export-done-title">
-                {summary.complete ? "导出完成" : "导出已中断（取消或达到条数上限）"}
+                {summary.complete
+                  ? "导出完成"
+                  : summary.hitHardCap
+                    ? `达到单次导出上限 ${count(MAX_EXPORT_ROWS)} 条，已停止`
+                    : "导出已中断（取消或达到条数上限）"}
               </div>
               <div className="export-done-meta">
                 {count(summary.rows)} 条 · {byteSize(summary.bytes)} · 分页方式 {summary.strategy}
               </div>
+              {summary.hitHardCap && (
+                <div className="export-done-note">
+                  需要导出全部数据请在服务器端进行（快照恢复 / elasticsearch-dump）。
+                </div>
+              )}
               <div className="export-done-path" title={summary.path}>
                 {summary.path}
               </div>
@@ -324,6 +334,11 @@ export default function ExportDialog({
             </label>
           </div>
 
+          <div className="export-hint export-cap-hint">
+            单次导出最多 {count(MAX_EXPORT_ROWS)} 条，避免拖垮集群和网络。需要导出全部数据请在服务器端进行
+            （快照恢复 / elasticsearch-dump）。
+          </div>
+
           <div className="export-row">
             <span className="export-label">保存到</span>
             <input
@@ -343,6 +358,15 @@ export default function ExportDialog({
             <div className="alert export-warn">
               <span>
                 条数上限 {count(rowLimit)} 小于命中数 {count(total)}，导出结果会被截断。
+              </span>
+            </div>
+          )}
+
+          {rowLimit === 0 && total > MAX_EXPORT_ROWS && (
+            <div className="alert export-warn">
+              <span>
+                命中数 {count(total)} 超过单次导出上限 {count(MAX_EXPORT_ROWS)}，
+                导出会在上限处停止。全部数据请在服务器端导出（快照恢复 / elasticsearch-dump）。
               </span>
             </div>
           )}
