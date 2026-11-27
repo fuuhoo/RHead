@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Connection, errorText, esGet, esPut, friendlyError } from "../lib/es";
 import { byteSize, count, healthColor, healthFraction } from "../lib/format";
 import { buildIndices, buildNodes, buildShardMatrix, ClusterSnapshot, fetchIndexStats, IndexStat } from "../lib/cluster";
+import { ClusterStorage, fetchStorage } from "../lib/storage";
 import JsonView from "../components/JsonView";
 import Drawer from "../components/Drawer";
 import Modal from "../components/Modal";
@@ -285,14 +286,15 @@ export default function Overview({ conn, snap, loading, onRefresh, onOpenIndex }
         </div>
       </section>
 
+      <StorageSection conn={conn} />
+
       <h3>节点 ({nodes.length})</h3>
       <div className="table-wrap">
         <table className="data-table">
           <thead>
             <tr>
               <th>名称</th>
-              <th>角色</th>
-              <th>HTTP 地址</th>
+              <th>角色</th>              <th>HTTP 地址</th>
               <th>堆内存</th>
               <th>磁盘</th>
               <th>CPU</th>
@@ -469,4 +471,187 @@ function meterColor(pct: number): string {
   if (pct >= 85) return "#ef4444";
   if (pct >= 70) return "#eab308";
   return "#22c55e";
+}
+
+/**
+ * The storage section of the overview.
+ *
+ * Shows how much room the cluster has in total and how it is spread over
+ * the nodes. Three numbers are kept apart, because they differ a lot and
+ * mixing them up is a common source of confusion:
+ *
+ *   索引数据量 - what the index data itself takes
+ *   磁盘已用   - how full the node's filesystem is (includes everything)
+ *   磁盘总量   - the size of the filesystem
+ */
+function StorageSection({ conn }: { conn: Connection }) {
+  const [data, setData] = useState<ClusterStorage | null>(null);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr("");
+    try {
+      setData(await fetchStorage(conn));
+    } catch (e: any) {
+      setErr(e?.message ?? String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [conn]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (err) {
+    return (
+      <section className="storage-section">
+        <div className="h3-row">
+          <h3>存储空间</h3>
+        </div>
+        <div className="alert alert-error">读取存储信息失败：{err}</div>
+      </section>
+    );
+  }
+
+  if (!data) {
+    return (
+      <section className="storage-section">
+        <div className="h3-row">
+          <h3>存储空间</h3>
+        </div>
+        <div className="muted">读取中…</div>
+      </section>
+    );
+  }
+
+  const { nodes } = data;
+  // the replica factor explains why the disk holds more than the index data
+  const ratio = data.primaryIndexBytes > 0 ? data.indexBytes / data.primaryIndexBytes : 1;
+
+  return (
+    <section className="storage-section">
+      <div className="h3-row">
+        <h3>存储空间</h3>
+        <button className="btn btn-xs btn-ghost" onClick={load} disabled={loading}>
+          {loading ? "刷新中…" : "刷新"}
+        </button>
+      </div>
+
+      <section className="cards">
+        <div className="card">
+          <span className="card-label">索引数据量</span>
+          <span className="card-value">{byteSize(data.primaryIndexBytes)}</span>
+          <span className="card-sub">
+            {data.indexCount} 个索引 · {count(data.docs)} 文档
+            {ratio > 1.05 && ` · 含副本共 ${byteSize(data.indexBytes)}`}
+          </span>
+        </div>
+        <div className="card">
+          <span className="card-label">磁盘已用</span>
+          <span className="card-value" style={{ color: meterColor(data.diskPercent) }}>
+            {byteSize(data.diskUsed)}
+          </span>
+          <span className="card-sub">占总量 {data.diskPercent.toFixed(1)}%</span>
+        </div>
+        <div className="card">
+          <span className="card-label">磁盘可用</span>
+          <span className="card-value">{byteSize(data.diskFree)}</span>
+          <span className="card-sub">共 {byteSize(data.diskTotal)}</span>
+        </div>
+        <div className="card">
+          <span className="card-label">节点</span>
+          <span className="card-value">{nodes.length}</span>
+          <span className="card-sub">
+            {nodes.reduce((a, n) => a + n.shards, 0)} 个分片副本
+            {data.unassignedShards > 0 && ` · ${data.unassignedShards} 个未分配`}
+          </span>
+        </div>
+      </section>
+
+      {data.unassignedShards > 0 && (
+        <div className="alert alert-warn">
+          有 <b>{data.unassignedShards} 个分片副本</b>没有分配到任何节点
+          —— 它们不占磁盘，但也不在备份里。集群缺节点时这个数字会变。
+        </div>
+      )}
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>节点</th>
+              <th>分片</th>
+              <th>索引数据</th>
+              <th>文档数</th>
+              <th>磁盘已用</th>
+              <th>磁盘总量</th>
+              <th>可用</th>
+              <th>使用率</th>
+              <th>数据路径</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.map((n) => (
+              <tr key={n.id}>
+                <td>{n.name}</td>
+                <td>
+                  {n.shards}
+                  {n.primaries > 0 && <span className="muted"> ({n.primaries} 主)</span>}
+                </td>
+                <td>{byteSize(n.indexBytes)}</td>
+                <td>{count(n.docs)}</td>
+                <td>{byteSize(n.diskUsed)}</td>
+                <td>{byteSize(n.diskTotal)}</td>
+                <td>{byteSize(n.diskFree)}</td>
+                <td>
+                  <span className="meter">
+                    <span
+                      style={{ width: `${Math.min(100, n.diskPercent)}%`, background: meterColor(n.diskPercent) }}
+                    />
+                    <em>{n.diskPercent.toFixed(1)}%</em>
+                  </span>
+                </td>
+                <td className="mono-small" title={n.dataPath}>
+                  {n.dataPath ?? "-"}
+                </td>
+              </tr>
+            ))}
+            {data.unassignedShards > 0 && (
+              <tr className="storage-unassigned">
+                <td>未分配</td>
+                <td>{data.unassignedShards}</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+                <td>-</td>
+              </tr>
+            )}
+          </tbody>
+          <tfoot>
+            <tr>
+              <td>合计</td>
+              <td>{nodes.reduce((a, n) => a + n.shards, 0) + data.unassignedShards}</td>
+              <td>{byteSize(data.indexBytes)}</td>
+              <td>{count(data.docs)}</td>
+              <td>{byteSize(data.diskUsed)}</td>
+              <td>{byteSize(data.diskTotal)}</td>
+              <td>{byteSize(data.diskFree)}</td>
+              <td>{data.diskPercent.toFixed(1)}%</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div className="storage-note">
+        「索引数据量」是索引本身的大小（不含副本）；「磁盘已用」是这个节点整个
+        数据目录所在磁盘的使用量 —— 里面还有日志、其它程序的文件，所以比索引数据大。
+      </div>
+    </section>
+  );
 }
