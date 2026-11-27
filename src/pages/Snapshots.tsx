@@ -17,6 +17,7 @@ import {
   fetchClusterHealth,
   fetchIndexSizes,
   fetchRepositories,
+  fetchShardCounts,
   fetchSlmPolicies,
   fetchSlmStatus,
   fetchSnapshotDetail,
@@ -55,6 +56,7 @@ export default function Snapshots({ conn }: { conn: Connection }) {
   const [slmMode, setSlmMode] = useState<string | null>(null);
   const [esMajor, setEsMajor] = useState<number | null>(null);
   const [indexSizes, setIndexSizes] = useState<Record<string, number>>({});
+  const [shardCounts, setShardCounts] = useState<Record<string, number>>({});
   const [health, setHealth] = useState<EsClusterHealth>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -64,18 +66,20 @@ export default function Snapshots({ conn }: { conn: Connection }) {
     setLoading(true);
     setError("");
     try {
-      const [r, p, mode, sizes, h] = await Promise.all([
+      const [r, p, mode, sizes, h, shards] = await Promise.all([
         fetchRepositories(conn),
         fetchSlmPolicies(conn),
         fetchSlmStatus(conn),
         fetchIndexSizes(conn),
         fetchClusterHealth(conn),
+        fetchShardCounts(conn),
       ]);
       setRepos(r);
       setPolicies(p);
       setSlmMode(mode);
       setIndexSizes(sizes);
       setHealth(h);
+      setShardCounts(shards);
     } catch (e: any) {
       setError(friendlyError(e, conn));
     } finally {
@@ -184,6 +188,7 @@ export default function Snapshots({ conn }: { conn: Connection }) {
           repos={repos}
           rows={snapRows}
           indexSizes={indexSizes}
+          shardCounts={shardCounts}
           reload={reload}
           setMsg={setMsg}
           setError={setError}
@@ -485,6 +490,7 @@ function SnapshotsTab({
   repos,
   rows,
   indexSizes,
+  shardCounts,
   reload,
   setMsg,
   setError,
@@ -493,6 +499,7 @@ function SnapshotsTab({
   repos: Record<string, EsRepo>;
   rows: SnapRow[];
   indexSizes: Record<string, number>;
+  shardCounts: Record<string, number>;
   reload: () => Promise<void>;
   setMsg: (s: string) => void;
   setError: (s: string) => void;
@@ -511,6 +518,26 @@ function SnapshotsTab({
    */
   const snapSize = (snap: EsSnapshot): number =>
     (snap.indices ?? []).reduce((n, idx) => n + (indexSizes[idx] ?? 0), 0);
+
+  /**
+   * How many shard copies the snapshot's indices have right now, and how
+   * many the snapshot actually stored.
+   *
+   * A snapshot only stores the shards that were assigned at the time. With
+   * `partial` enabled ES accepts that silently, so the snapshot looks fine
+   * while missing data. Comparing with the current shard count of the same
+   * indices shows the gap.
+   */
+  const snapHealth = (snap: EsSnapshot): { expected: number; stored: number; missing: number } => {
+    const expected = (snap.indices ?? []).reduce((n, idx) => n + (shardCounts[idx] ?? 0), 0);
+    const stored = snap.shards?.total ?? 0;
+    return { expected, stored, missing: Math.max(0, expected - stored) };
+  };
+
+  const incompleteCount = useMemo(
+    () => rows.filter(({ snap }) => snapHealth(snap).missing > 0).length,
+    [rows, shardCounts]
+  );
 
   async function remove(repo: string, snap: string) {
     if (!window.confirm(`确定删除快照「${snap}」？\n\n仓库里的数据文件会被一并删除，无法恢复。`)) return;
@@ -584,6 +611,14 @@ function SnapshotsTab({
         </div>
       )}
 
+      {incompleteCount > 0 && (
+        <div className="alert alert-warn snap-incomplete">
+          <b>{incompleteCount} 个快照缺少分片</b>
+          （下表「完整性」列标了「缺 N 片」）。这些快照不是完整备份 ——
+          缺失的索引当时没有可用的分片副本，恢复时会缺数据。
+        </div>
+      )}
+
       <div className="table-wrap">
         <table className="data-table">
           <thead>
@@ -594,6 +629,7 @@ function SnapshotsTab({
               <th>索引</th>
               <th>分片</th>
               <th>大小</th>
+              <th>完整性</th>
               <th>开始时间</th>
               <th>耗时</th>
               <th>操作</th>
@@ -621,6 +657,27 @@ function SnapshotsTab({
                 >
                   {snapSize(snap) > 0 ? byteSize(snapSize(snap)) : "—"}
                 </td>
+                <td>
+                  {(() => {
+                    const hp = snapHealth(snap);
+                    if (!hp.expected) return <span className="muted">—</span>;
+                    if (hp.missing > 0) {
+                      return (
+                        <span
+                          className="tag tag-warn"
+                          title={`这些索引现在有 ${hp.expected} 个分片副本，快照只存了 ${hp.stored} 个，缺 ${hp.missing} 个`}
+                        >
+                          缺 {hp.missing} 片
+                        </span>
+                      );
+                    }
+                    return (
+                      <span className="tag tag-ok" title={`${hp.stored} 个分片副本都在`}>
+                        {hp.stored}
+                      </span>
+                    );
+                  })()}
+                </td>
                 <td>{snap.start_time ? new Date(snap.start_time).toLocaleString("zh-CN") : "—"}</td>
                 <td>{snap.duration_in_millis ? `${(snap.duration_in_millis / 1000).toFixed(1)}s` : "—"}</td>
                 <td className="sec-actions">
@@ -639,7 +696,7 @@ function SnapshotsTab({
             ))}
             {!rows.length && (
               <tr>
-                <td colSpan={9} className="muted" style={{ textAlign: "center", padding: 20 }}>
+                <td colSpan={10} className="muted" style={{ textAlign: "center", padding: 20 }}>
                   {repoList.length ? "还没有快照。点「新建快照」创建第一个。" : "—"}
                 </td>
               </tr>
@@ -669,6 +726,7 @@ function SnapshotsTab({
           name={detail.snap.snapshot}
           fallback={detail.snap}
           indexSizes={indexSizes}
+          shardCounts={shardCounts}
           onClose={() => setDetail(null)}
         />
       )}
@@ -883,6 +941,7 @@ function SnapshotDetail({
   name,
   fallback,
   indexSizes,
+  shardCounts,
   onClose,
 }: {
   conn: Connection;
@@ -890,6 +949,7 @@ function SnapshotDetail({
   name: string;
   fallback: EsSnapshot;
   indexSizes: Record<string, number>;
+  shardCounts: Record<string, number>;
   onClose: () => void;
 }) {
   const [snap, setSnap] = useState<EsSnapshot>(fallback);
@@ -907,6 +967,10 @@ function SnapshotDetail({
   const size = (snap as any)?.size_in_bytes;
   // the snapshot API has no size - use the size of the indices it holds
   const idxSize = (snap.indices ?? []).reduce((n: number, i: string) => n + (indexSizes[i] ?? 0), 0);
+  // the shards the snapshot's indices have now, vs the ones it stored
+  const expectedShards = (snap.indices ?? []).reduce((n: number, i: string) => n + (shardCounts[i] ?? 0), 0);
+  const storedShards = snap.shards?.total ?? 0;
+  const missingShards = Math.max(0, expectedShards - storedShards);
 
   return (
     <Drawer title={`快照 ${name}`} onClose={onClose} width={680}>
@@ -919,6 +983,15 @@ function SnapshotDetail({
         <div className="kv"><span>结束时间</span><b>{snap.end_time ? new Date(snap.end_time).toLocaleString("zh-CN") : "—"}</b></div>
         <div className="kv"><span>耗时</span><b>{snap.duration_in_millis ? `${(snap.duration_in_millis / 1000).toFixed(1)} 秒` : "—"}</b></div>
         <div className="kv"><span>分片</span><b>{snap.shards?.successful ?? "—"}/{snap.shards?.total ?? "—"}</b></div>
+        <div
+          className="kv"
+          title="这些索引现在有多少分片副本，快照实际存了多少。缺片说明快照时索引没有可用的分片副本，恢复时会缺数据。"
+        >
+          <span>完整性</span>
+          <b style={missingShards > 0 ? { color: "var(--danger)" } : undefined}>
+            {expectedShards ? (missingShards > 0 ? `缺 ${missingShards} 个分片` : "完整") : "—"}
+          </b>
+        </div>
         {size != null && <div className="kv"><span>大小</span><b>{byteSize(size)}</b></div>}
         {size == null && idxSize > 0 && (
           <div className="kv" title="ES 的快照接口不返回单个快照的大小。这是快照包含的索引在集群中的占用，全量快照的大致值；增量快照实际更小。">

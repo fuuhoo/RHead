@@ -976,6 +976,7 @@ mark { background: #fde68a; padding: 0 1px; border-radius: 2px; }
 /* ---------- snapshot management ---------- */
 .snap-error { white-space: pre-line; }
 .snap-degraded { line-height: 1.7; }
+.snap-incomplete { line-height: 1.7; }
 .snap-degraded code {
   font-family: var(--mono); font-size: 11.5px;
   background: rgba(255, 255, 255, 0.6); padding: 1px 4px; border-radius: 4px;
