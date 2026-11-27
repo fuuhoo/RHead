@@ -3,6 +3,7 @@ import { Connection, esGet, friendlyError } from "../lib/es";
 import { byteSize } from "../lib/format";
 import {
   CreateSnapshotOptions,
+  EsClusterHealth,
   EsRepo,
   EsSlmPolicy,
   EsSnapshot,
@@ -13,6 +14,8 @@ import {
   deleteRepository,
   deleteSlmPolicy,
   deleteSnapshot,
+  fetchClusterHealth,
+  fetchIndexSizes,
   fetchRepositories,
   fetchSlmPolicies,
   fetchSlmStatus,
@@ -51,6 +54,8 @@ export default function Snapshots({ conn }: { conn: Connection }) {
   const [policies, setPolicies] = useState<Record<string, EsSlmPolicy>>({});
   const [slmMode, setSlmMode] = useState<string | null>(null);
   const [esMajor, setEsMajor] = useState<number | null>(null);
+  const [indexSizes, setIndexSizes] = useState<Record<string, number>>({});
+  const [health, setHealth] = useState<EsClusterHealth>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
@@ -59,14 +64,18 @@ export default function Snapshots({ conn }: { conn: Connection }) {
     setLoading(true);
     setError("");
     try {
-      const [r, p, mode] = await Promise.all([
+      const [r, p, mode, sizes, h] = await Promise.all([
         fetchRepositories(conn),
         fetchSlmPolicies(conn),
         fetchSlmStatus(conn),
+        fetchIndexSizes(conn),
+        fetchClusterHealth(conn),
       ]);
       setRepos(r);
       setPolicies(p);
       setSlmMode(mode);
+      setIndexSizes(sizes);
+      setHealth(h);
     } catch (e: any) {
       setError(friendlyError(e, conn));
     } finally {
@@ -136,6 +145,18 @@ export default function Snapshots({ conn }: { conn: Connection }) {
       {error && <div className="alert alert-error snap-error">{error}</div>}
       {msg && <div className="alert alert-ok">{msg}</div>}
 
+      {/* A snapshot only stores the shards that are actually up. With
+          `partial` enabled ES accepts the result silently - so a degraded
+          cluster produces backups that are quietly missing data. */}
+      {(health.unassignedShards ?? 0) > 0 && (
+        <div className="alert alert-warn snap-degraded">
+          <b>集群有 {health.unassignedShards} 个分片未分配</b>
+          （已分配 {health.activeShards ?? 0}/{health.totalShards ?? 0}，节点数 {health.numberOfNodes ?? "?"}）。
+          快照只会包含已分配的分片，若策略开启了 <code>partial</code>，缺分片不会报错 ——
+          这些快照<b>并不是完整备份</b>。
+        </div>
+      )}
+
       <div className="mode-seg sec-tabs" role="tablist">
         {TABS.map((t) => (
           <button key={t.id} className={tab === t.id ? "on" : ""} onClick={() => setTab(t.id)} role="tab">
@@ -162,6 +183,7 @@ export default function Snapshots({ conn }: { conn: Connection }) {
           conn={conn}
           repos={repos}
           rows={snapRows}
+          indexSizes={indexSizes}
           reload={reload}
           setMsg={setMsg}
           setError={setError}
@@ -462,6 +484,7 @@ function SnapshotsTab({
   conn,
   repos,
   rows,
+  indexSizes,
   reload,
   setMsg,
   setError,
@@ -469,6 +492,7 @@ function SnapshotsTab({
   conn: Connection;
   repos: Record<string, EsRepo>;
   rows: SnapRow[];
+  indexSizes: Record<string, number>;
   reload: () => Promise<void>;
   setMsg: (s: string) => void;
   setError: (s: string) => void;
@@ -479,6 +503,14 @@ function SnapshotsTab({
   const repoList = useMemo(() => Object.keys(repos).sort(), [repos]);
 
   const repoCount = (repo: string) => (repos[repo]?.snapshots ?? []).length;
+
+  /**
+   * The snapshot API does not report the size of a snapshot, so the size of
+   * the indices it contains is used. That matches a full snapshot - an
+   * incremental one only stores the changed segments and is smaller.
+   */
+  const snapSize = (snap: EsSnapshot): number =>
+    (snap.indices ?? []).reduce((n, idx) => n + (indexSizes[idx] ?? 0), 0);
 
   async function remove(repo: string, snap: string) {
     if (!window.confirm(`确定删除快照「${snap}」？\n\n仓库里的数据文件会被一并删除，无法恢复。`)) return;
@@ -561,6 +593,7 @@ function SnapshotsTab({
               <th>状态</th>
               <th>索引</th>
               <th>分片</th>
+              <th>大小</th>
               <th>开始时间</th>
               <th>耗时</th>
               <th>操作</th>
@@ -583,6 +616,11 @@ function SnapshotsTab({
                   {snap.shards?.successful ?? "—"}
                   {snap.shards?.failed ? ` / ${snap.shards.total}` : ""}
                 </td>
+                <td
+                  title="快照包含的索引在集群中的占用。ES 的快照接口不返回单个快照的大小，这是全量快照的大致值；增量快照实际更小。"
+                >
+                  {snapSize(snap) > 0 ? byteSize(snapSize(snap)) : "—"}
+                </td>
                 <td>{snap.start_time ? new Date(snap.start_time).toLocaleString("zh-CN") : "—"}</td>
                 <td>{snap.duration_in_millis ? `${(snap.duration_in_millis / 1000).toFixed(1)}s` : "—"}</td>
                 <td className="sec-actions">
@@ -601,7 +639,7 @@ function SnapshotsTab({
             ))}
             {!rows.length && (
               <tr>
-                <td colSpan={8} className="muted" style={{ textAlign: "center", padding: 20 }}>
+                <td colSpan={9} className="muted" style={{ textAlign: "center", padding: 20 }}>
                   {repoList.length ? "还没有快照。点「新建快照」创建第一个。" : "—"}
                 </td>
               </tr>
@@ -630,6 +668,7 @@ function SnapshotsTab({
           repo={detail.repo}
           name={detail.snap.snapshot}
           fallback={detail.snap}
+          indexSizes={indexSizes}
           onClose={() => setDetail(null)}
         />
       )}
@@ -843,12 +882,14 @@ function SnapshotDetail({
   repo,
   name,
   fallback,
+  indexSizes,
   onClose,
 }: {
   conn: Connection;
   repo: string;
   name: string;
   fallback: EsSnapshot;
+  indexSizes: Record<string, number>;
   onClose: () => void;
 }) {
   const [snap, setSnap] = useState<EsSnapshot>(fallback);
@@ -864,6 +905,8 @@ function SnapshotDetail({
   }, [conn, repo, name]);
 
   const size = (snap as any)?.size_in_bytes;
+  // the snapshot API has no size - use the size of the indices it holds
+  const idxSize = (snap.indices ?? []).reduce((n: number, i: string) => n + (indexSizes[i] ?? 0), 0);
 
   return (
     <Drawer title={`快照 ${name}`} onClose={onClose} width={680}>
@@ -877,6 +920,11 @@ function SnapshotDetail({
         <div className="kv"><span>耗时</span><b>{snap.duration_in_millis ? `${(snap.duration_in_millis / 1000).toFixed(1)} 秒` : "—"}</b></div>
         <div className="kv"><span>分片</span><b>{snap.shards?.successful ?? "—"}/{snap.shards?.total ?? "—"}</b></div>
         {size != null && <div className="kv"><span>大小</span><b>{byteSize(size)}</b></div>}
+        {size == null && idxSize > 0 && (
+          <div className="kv" title="ES 的快照接口不返回单个快照的大小。这是快照包含的索引在集群中的占用，全量快照的大致值；增量快照实际更小。">
+            <span>大小(约)</span><b>{byteSize(idxSize)}</b>
+          </div>
+        )}
         <div className="kv"><span>包含全局状态</span><b>{snap.include_global_state ? "是" : "否"}</b></div>
       </div>
 
@@ -884,7 +932,10 @@ function SnapshotDetail({
         <h4>索引 ({snap.indices?.length ?? 0})</h4>
         <div className="sec-role-picker">
           {(snap.indices ?? []).map((i) => (
-            <span className="tag" key={i}>{i}</span>
+            <span className="tag" key={i} title={indexSizes[i] ? `占用 ${byteSize(indexSizes[i])}` : undefined}>
+              {i}
+              {indexSizes[i] ? ` · ${byteSize(indexSizes[i])}` : ""}
+            </span>
           ))}
           {!snap.indices?.length && <span className="muted">—</span>}
         </div>

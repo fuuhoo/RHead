@@ -413,6 +413,55 @@ export async function stopSlm(conn: Connection): Promise<EsResult> {
   return esPost(conn, "_slm/_stop");
 }
 
+/**
+ * GET /_cat/indices -> { index: bytes }
+ *
+ * The snapshot API does not report how big a snapshot is, so the size of the
+ * indices it contains is used as the approximation. It matches the size of a
+ * full snapshot; incremental snapshots are smaller.
+ */
+export async function fetchIndexSizes(conn: Connection): Promise<Record<string, number>> {
+  const r = await esGet(conn, "_cat/indices?format=json&h=index,store.size&bytes=b");
+  if (r.status >= 400) return {};
+  const out: Record<string, number> = {};
+  for (const row of (r.json ?? []) as any[]) {
+    const n = Number(row?.["store.size"]);
+    if (row?.index && Number.isFinite(n)) out[row.index] = n;
+  }
+  return out;
+}
+
+/** The relevant part of the cluster health. */
+export interface EsClusterHealth {
+  status?: string;
+  numberOfNodes?: number;
+  activeShards?: number;
+  unassignedShards?: number;
+  totalShards?: number;
+}
+
+/** GET /_cluster/health */
+export async function fetchClusterHealth(conn: Connection): Promise<EsClusterHealth> {
+  const r = await esGet(
+    conn,
+    "_cluster/health?filter_path=status,number_of_nodes,active_shards,unassigned_shards,initializing_shards,relocating_shards"
+  );
+  if (r.status >= 400) return {};
+  const j = r.json ?? {};
+  const active = j.active_shards ?? 0;
+  const unassigned = j.unassigned_shards ?? 0;
+  const initializing = j.initializing_shards ?? 0;
+  const relocating = j.relocating_shards ?? 0;
+  return {
+    status: j.status,
+    numberOfNodes: j.number_of_nodes,
+    activeShards: active,
+    unassignedShards: unassigned,
+    // the health API has no total - it is the sum of all shard states
+    totalShards: active + unassigned + initializing + relocating,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
