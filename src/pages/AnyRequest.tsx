@@ -511,16 +511,16 @@ export default function AnyRequest({ conn }: { conn: Connection }) {
           }}
         />
         {vizBody && (
-          <details className="viz-details" open>
+          <details className="viz-details">
             <summary>查询结构可视化</summary>
             <QueryVisualizer body={vizBody} compact />
           </details>
         )}
-        <div className="filter-section">
-          <h4>结果转换器 <code>function(root, prev) {"{"}</code></h4>
+        <details className="filter-section transformer-section">
+          <summary className="transformer-summary">结果转换器 <code>function(root, prev) {"{"}</code></summary>
           <textarea className="code-editor" rows={3} value={transform} onChange={(e) => setTransform(e.target.value)} spellCheck={false} />
           <code>{"}"}</code>
-        </div>
+        </details>
         {error && <div className="alert alert-error">{error}</div>}
         {out != null && (
           <div className="any-out">
@@ -626,16 +626,16 @@ function LintPanel({
               <span className="lint-glyph">{LEVEL_GLYPH[h.level]}</span>
               <div className="lint-body">
                 <div className="lint-item-title">
-                  {h.title}
+                  <span className="lint-text">{h.title}</span>
                   <span className="lint-level">{LEVEL_LABEL[h.level]}</span>
                   {h.at && <code className="lint-at">{h.at}</code>}
+                  {h.fix && (
+                    <button className="btn btn-xs lint-fix" onClick={() => onApply(h.fix!.body)}>
+                      {h.fix.label}
+                    </button>
+                  )}
                 </div>
                 {h.detail && <div className="lint-detail">{h.detail}</div>}
-                {h.fix && (
-                  <button className="btn btn-xs lint-fix" onClick={() => onApply(h.fix!.body)}>
-                    {h.fix.label}
-                  </button>
-                )}
               </div>
             </li>
           ))}

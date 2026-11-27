@@ -15,7 +15,11 @@ interface Props {
   valueHints?: Record<string, string[]>;
   /** called whenever the caret context changes, so the page can load values */
   onContextChange?: (ctx: EditorCtx) => void;
+  /** the maximum height of the editing area */
   height?: number;
+  /** shrink the editing area to fit the content (but never below this) */
+  minHeight?: number;
+  autoHeight?: boolean;
   placeholder?: string;
   label?: string;
   onSubmit?: () => void;
@@ -33,6 +37,8 @@ export default function QueryEditor({
   valueHints,
   onContextChange,
   height = 220,
+  minHeight = 108,
+  autoHeight = true,
   placeholder,
   label,
   onSubmit,
@@ -63,6 +69,18 @@ export default function QueryEditor({
   }, [value]);
 
   const highlighted = useMemo(() => highlightJson(value + "\n"), [value]);
+
+  /**
+   * Shrink the editing area to the content so a short body does not push
+   * the result area out of the window. A long body still gets the full
+   * height and scrolls inside.
+   */
+  const shellHeight = useMemo(() => {
+    if (!autoHeight) return height;
+    const lines = value.split("\n").length;
+    const wanted = lines * LINE_H + PAD_Y * 2 + 1;
+    return Math.min(height, Math.max(minHeight, wanted));
+  }, [value, height, minHeight, autoHeight]);
 
   // Measure monospace char width once for caret-relative dropdown placement
   useLayoutEffect(() => {
@@ -348,7 +366,7 @@ export default function QueryEditor({
           </span>
         </div>
       )}
-      <div className="qe-shell" style={{ height }}>
+      <div className="qe-shell" style={{ height: shellHeight }}>
         <pre ref={hlRef} className="qe-hl" aria-hidden>
           {highlighted}
         </pre>

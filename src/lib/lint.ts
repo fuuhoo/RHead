@@ -233,11 +233,11 @@ function checkBody(body: any, at: string, ctx: LintContext, hints: LintHint[]) {
       });
     }
   }
-  if (size != null && size > 100) {
+  if (size != null && size > 200) {
     hints.push({
       level: "info",
       title: `size = ${size} 偏大`,
-      detail: "一次拉太多文档会拖慢查询，通常 50~100 就够看了。",
+      detail: "一次拉太多文档会拖慢查询，通常 100 就够看了。",
       at: at ? `${at}.size` : "size",
     });
   }
@@ -247,8 +247,7 @@ function checkBody(body: any, at: string, ctx: LintContext, hints: LintHint[]) {
     hints.push({
       level: "info",
       title: "没有设置 track_total_hits，命中总数最多只到 10000",
-      detail:
-        'ES 默认把 hits.total 截断在 10000。要精确的总数，加 "track_total_hits": true。',
+      detail: 'ES 默认把 hits.total 截断在 10000。要精确的总数就加上它。',
       at: "track_total_hits",
       fix: { label: "加上 track_total_hits: true", body: { ...body, track_total_hits: true } },
     });
@@ -284,7 +283,7 @@ function checkBody(body: any, at: string, ctx: LintContext, hints: LintHint[]) {
     hints.push({
       level: "info",
       title: "没有过滤 _source，会把整个文档拉回来",
-      detail: '只需要部分字段时用 "_source": ["字段1", "字段2"]，能少很多网络流量。',
+      detail: '只要部分字段就用 "_source": ["字段1", "字段2"]。',
       at: "_source",
     });
   }
