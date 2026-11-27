@@ -122,23 +122,24 @@ jobs:
         shell: bash
         run: |
           mkdir -p installers
-          find src-tauri/target -path '*/release/bundle/*' -type f \
+          # Only the cross compiled target directory is used. `tauri build
+          # --target` also leaves a host build behind in target/release, and
+          # picking that one up would publish the wrong architecture.
+          find "src-tauri/target/${{ matrix.target }}/release/bundle" -type f \
             \( -name '*.msi' -o -name '*.exe' -o -name '*.dmg' -o -name '*.deb' \
                -o -name '*.rpm' -o -name '*.AppImage' \) \
-            -exec cp {} installers/ \;
+            -exec cp {} installers/ \; 2>/dev/null || true
           # macOS: also ship the .app bundle as a tar.gz. The name must carry
           # the target - both macOS jobs build an app called RHead.app and
           # would otherwise produce the same tarball name.
-          for app in src-tauri/target/*/release/bundle/macos/*.app \
-                     src-tauri/target/release/bundle/macos/*.app; do
+          for app in src-tauri/target/*/release/bundle/macos/*.app; do
             [ -e "$app" ] || continue
             # src-tauri/target/<target>/release/bundle/macos/RHead.app
             raw="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$app")")")")")"
             case "$raw" in
               x86_64-apple-darwin) target="x64" ;;
               aarch64-apple-darwin) target="aarch64" ;;
-              release) target="${{ matrix.target }}" ;;
-              *) target="$raw" ;;
+              *) continue ;;
             esac
             tar -czf "installers/RHead_${target}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
           done
